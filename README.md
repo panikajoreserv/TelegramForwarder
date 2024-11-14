@@ -13,6 +13,11 @@ TelegramForwarder is a powerful and user-friendly Telegram bot designed for auto
 
 [English](#features) | [中文说明](#功能特点)
 
+
+<div align="center">
+  <img src="assets/int.png" alt="Trading Flow" width="100%">
+</div>
+
 ## ✨ Features
 
 - 🔄 Automated message forwarding between channels
@@ -146,20 +151,20 @@ python main.py
 <div align="center">
   <table>
     <tr>
-      <th>数字资产</th>
-      <th>地址</th>
+      <th>Digital Asset</th>
+      <th>Address</th>
     </tr>
     <tr>
       <td><img src="https://img.shields.io/badge/Bitcoin-000000?style=flat&logo=bitcoin&logoColor=white"/> BTC</td>
-      <td><code>bc1qrckre4505qtph8x5hgp3qt6hhj8zgyjgwklpah</code></td>
+      <td><code>1588hGJGh8WfeQNEydxEcurpPR8CaH9FCX</code></td>
     </tr>
     <tr>
       <td><img src="https://img.shields.io/badge/Tether-50AF95?style=flat&logo=tether&logoColor=white"/> USDT (TRC20)</td>
-      <td><code>TFMxq6pXe56yqZJYCaKJVLZ8Q6CuePuwhX</code></td>
+      <td><code>TY1A9McJd6wz1ZgfVHmLEoQGFJX27WSNoN</code></td>
     </tr>
     <tr>
       <td><img src="https://img.shields.io/badge/Ethereum-3C3C3D?style=flat&logo=ethereum&logoColor=white"/> ETH</td>
-      <td><code>0x5D23558Cf7449A4817e732E4c1476386e5F4D457</code></td>
+      <td><code>0x5aa791a5fe03f823275d7240ebe887d35fdf0f3b</code></td>
     </tr>
   </table>
 </div>
