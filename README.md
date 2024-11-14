@@ -74,8 +74,7 @@ If you find this project helpful, please consider supporting its development:
     </tr>
     <tr>
       <td><img src="https://img.shields.io/badge/Bitcoin-000000?style=flat&logo=bitcoin&logoColor=white"/> BTC</td>
-      <td><code>1588hGJGh8WfeQNEydxEcurpPR8CaH9FCX
-      </code></td>
+      <td><code>1588hGJGh8WfeQNEydxEcurpPR8CaH9FCX</code></td>
     </tr>
     <tr>
       <td><img src="https://img.shields.io/badge/Tether-50AF95?style=flat&logo=tether&logoColor=white"/> USDT (TRC20)</td>
