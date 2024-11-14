@@ -1,4 +1,4 @@
-# main.py - 主程序
+# main.py
 import asyncio
 import logging
 from telegram.ext import Application, CommandHandler
@@ -7,6 +7,7 @@ from database import Database
 from channel_manager import ChannelManager
 from config import Config
 from message_handler import MyMessageHandler
+from commands import BotCommands
 from telegram import (
     Update, 
     InlineKeyboardButton, 
@@ -21,7 +22,7 @@ from telegram.ext import (
     CommandHandler,
     filters
 )
-
+from locales import get_text
 
 class ForwardBot:
     def __init__(self, config):
@@ -45,12 +46,13 @@ class ForwardBot:
         # Setup handlers
         self.setup_handlers()
 
-    # In main.py
     def setup_handlers(self):
         """设置消息处理器"""
         # 命令处理器
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("channels", self.channels_command))
+        self.application.add_handler(CommandHandler("language", self.language_command))
+        self.application.add_handler(CommandHandler("help", self.help_command))
         
         # 添加频道管理处理器
         for handler in self.channel_manager.get_handlers():
@@ -59,34 +61,109 @@ class ForwardBot:
         # 添加错误处理器
         self.application.add_error_handler(self.error_handler)
 
+
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理错误"""
         logging.error(f"Update {update} caused error {context.error}")
+        try:
+            if update and update.effective_chat:
+                lang = self.db.get_user_language(update.effective_chat.id)
+                if update.callback_query:
+                    await update.callback_query.message.reply_text(
+                        get_text(lang, 'error_occurred')
+                    )
+                elif update.message:
+                    await update.message.reply_text(
+                        get_text(lang, 'error_occurred')
+                    )
+        except Exception as e:
+            logging.error(f"Error in error handler: {e}")
         
-    async def start_command(self, update, context):
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /start 命令"""
         if update.effective_user.id != self.config.OWNER_ID:
-            await update.message.reply_text("未经授权的访问")
+            lang = self.db.get_user_language(update.effective_user.id)
+            await update.message.reply_text(get_text(lang, 'unauthorized'))
             return
 
-        await update.message.reply_text(
-            "👋 欢迎使用频道转发机器人!\n\n"
-            "使用 /channels 管理频道和转发配对"
-        )
+        lang = self.db.get_user_language(update.effective_user.id)
+        await update.message.reply_text(get_text(lang, 'welcome'))
 
-    async def channels_command(self, update, context):
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理 /help 命令"""
+        if update.effective_user.id != self.config.OWNER_ID:
+            lang = self.db.get_user_language(update.effective_user.id)
+            await update.message.reply_text(get_text(lang, 'unauthorized'))
+            return
+
+        lang = self.db.get_user_language(update.effective_user.id)
+        help_text = get_text(lang, 'help_message')
+        
+        try:
+            await update.message.reply_text(
+                help_text,
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        get_text(lang, 'channel_management'),
+                        callback_data="channel_management"
+                    )
+                ]])
+            )
+        except Exception as e:
+            logging.error(f"Error sending help message: {e}")
+            # 如果Markdown解析失败，尝试发送纯文本
+            try:
+                await update.message.reply_text(
+                    help_text,
+                    parse_mode=None,
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            get_text(lang, 'channel_management'),
+                            callback_data="channel_management"
+                        )
+                    ]])
+                )
+            except Exception as e2:
+                logging.error(f"Error sending plain text help message: {e2}")
+                await update.message.reply_text(
+                    get_text(lang, 'error_occurred')
+                )
+
+    async def language_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理 /language 命令"""
+        if update.effective_user.id != self.config.OWNER_ID:
+            lang = self.db.get_user_language(update.effective_user.id)
+            await update.message.reply_text(get_text(lang, 'unauthorized'))
+            return
+            
+        await self.channel_manager.show_language_settings(update, context)
+
+    async def channels_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /channels 命令"""
         if update.effective_user.id != self.config.OWNER_ID:
-            await update.message.reply_text("未经授权的访问")
+            lang = self.db.get_user_language(update.effective_user.id)
+            await update.message.reply_text(get_text(lang, 'unauthorized'))
             return
 
-        await self.channel_manager.show_channel_management(update.message, True)
+        await self.channel_manager.show_channel_management(update, context)
 
-        self.message_handler = MyMessageHandler(self.db, self.client, self.application.bot)
+    async def initialize(self):
+        """初始化机器人配置"""
+        try:
+            # 设置命令列表
+            await BotCommands.setup_commands(self.application)
+            logging.info("Successfully initialized bot commands")
+        except Exception as e:
+            logging.error(f"Failed to initialize bot: {e}")
+            raise
 
     async def start(self):
         """启动机器人"""
         try:
+            # 初始化配置
+            await self.initialize()
+            
             # 启动 Telethon 客户端
             await self.client.start(phone=self.config.PHONE_NUMBER)
             

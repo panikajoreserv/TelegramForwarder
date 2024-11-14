@@ -1,6 +1,4 @@
-# message_handler.py - 消息处理
-# 修改后的消息处理器
-
+# message_handler.py
 from telethon import TelegramClient, events
 import os
 import logging
@@ -9,6 +7,7 @@ from typing import Optional, BinaryIO
 from tempfile import NamedTemporaryFile
 import asyncio
 from datetime import datetime, timedelta
+from locales import get_text
 
 class MyMessageHandler:
     def __init__(self, db, client: TelegramClient, bot):
@@ -38,9 +37,9 @@ class MyMessageHandler:
                         if os.path.exists(file_path):
                             try:
                                 os.remove(file_path)
-                                logging.info(f"Cleaned up old temp file: {file_path}")
+                                logging.info(get_text('en', 'file_cleanup_success', file_path=file_path))
                             except Exception as e:
-                                logging.error(f"Error cleaning up old file {file_path}: {e}")
+                                logging.error(get_text('en', 'file_cleanup_error', file_path=file_path, error=str(e)))
                         files_to_remove.append(file_path)
 
                 # 从跟踪列表中移除已清理的文件
@@ -48,7 +47,7 @@ class MyMessageHandler:
                     self.temp_files.pop(file_path, None)
 
             except Exception as e:
-                logging.error(f"Error in cleanup task: {e}")
+                logging.error(get_text('en', 'cleanup_task_error', error=str(e)))
             
             # 每小时运行一次
             await asyncio.sleep(3600)
@@ -75,12 +74,14 @@ class MyMessageHandler:
                 try:
                     await self.handle_forward_message(message, chat, channel)
                 except Exception as e:
-                    logging.error(f"Error forwarding to channel {channel.get('channel_id')}: {e}")
+                    logging.error(get_text('en', 'forward_channel_error', 
+                                         channel_id=channel.get('channel_id'), 
+                                         error=str(e)))
                     continue
 
         except Exception as e:
-            logging.error(f"Error in handle_channel_message: {str(e)}")
-            logging.error(f"Full error details: {traceback.format_exc()}")
+            logging.error(get_text('en', 'message_handler_error', error=str(e)))
+            logging.error(get_text('en', 'error_details', details=traceback.format_exc()))
 
     async def handle_media_send(self, message, channel_id, from_chat, media_type: str):
         """处理媒体发送并确保清理"""
@@ -96,16 +97,16 @@ class MyMessageHandler:
             )
             
             if not file_path:
-                raise Exception("Failed to download media")
+                raise Exception(get_text('en', 'media_download_failed'))
 
-            caption = f"转发自: {getattr(from_chat, 'title', 'Unknown Channel')}"
+            caption = get_text('en', 'forwarded_from', channel=getattr(from_chat, 'title', 'Unknown Channel'))
             
             # 记录临时文件
             self.temp_files[file_path] = datetime.now()
             
             # 确保文件存在
             if not os.path.exists(file_path):
-                raise Exception(f"Downloaded file not found: {file_path}")
+                raise Exception(get_text('en', 'downloaded_file_not_found', file_path=file_path))
 
             # 发送媒体文件
             with open(file_path, 'rb') as media_file:
@@ -128,13 +129,17 @@ class MyMessageHandler:
                         caption=caption
                     )
 
-            logging.info(f"Successfully sent {media_type} to channel {channel_id}")
+            logging.info(get_text('en', 'media_send_success', 
+                                media_type=media_type, 
+                                channel_id=channel_id))
             
             # 发送成功后立即删除文件
             await self.cleanup_file(file_path)
             
         except Exception as e:
-            logging.error(f"Error sending {media_type}: {e}")
+            logging.error(get_text('en', 'media_send_error', 
+                                 media_type=media_type, 
+                                 error=str(e)))
             if file_path:
                 await self.cleanup_file(file_path)
             raise
@@ -149,21 +154,23 @@ class MyMessageHandler:
             if file_path and os.path.exists(file_path):
                 os.remove(file_path)
                 self.temp_files.pop(file_path, None)
-                logging.info(f"Successfully cleaned up file: {file_path}")
+                logging.info(get_text('en', 'file_cleanup_success', file_path=file_path))
         except Exception as e:
-            logging.error(f"Error cleaning up file {file_path}: {e}")
+            logging.error(get_text('en', 'file_cleanup_error', 
+                                 file_path=file_path, 
+                                 error=str(e)))
 
     async def handle_forward_message(self, message, from_chat, to_channel):
         """处理消息转发"""
         if not message or not from_chat or not to_channel:
-            logging.error("Missing required parameters for message forwarding")
+            logging.error(get_text('en', 'missing_parameters'))
             return
 
         try:
             channel_id = to_channel.get('channel_id')
             channel_id = int("-100"+str(channel_id))
             if not channel_id:
-                logging.error("Invalid channel ID")
+                logging.error(get_text('en', 'invalid_channel_id'))
                 return
 
             # 尝试直接转发
@@ -173,28 +180,56 @@ class MyMessageHandler:
                     from_chat_id=from_chat.id,
                     message_id=message.id
                 )
-                logging.info(f"Successfully forwarded message to channel {channel_id}")
+                logging.info(get_text('en', 'forward_success', channel_id=channel_id))
                 return
             except Exception as e:
-                logging.warning(f"Direct forward failed, trying alternative method: {e}")
+                logging.warning(get_text('en', 'direct_forward_failed', error=str(e)))
 
             # 处理文本消息
             if getattr(message, 'text', None):
                 channel_title = getattr(from_chat, 'title', 'Unknown Channel')
                 channel_username = getattr(from_chat, 'username', None)
                 
-                forwarded_text = (
-                    f"转发自: {channel_title}\n"
-                    f"{'@' + channel_username if channel_username else '私有频道'}\n"
-                    f"{'_'*30}\n\n"
-                    f"{message.text}"
+                # 获取chat类型和链接
+                chat_type = "private_channel"  # 默认类型
+                chat_link = None
+                
+                # 判断chat类型
+                if hasattr(from_chat, 'username') and from_chat.username:
+                    chat_type = "public_channel"
+                    chat_link = f"@{from_chat.username}"
+                elif hasattr(from_chat, 'invite_link') and from_chat.invite_link:
+                    chat_type = "private_channel_with_link"
+                    chat_link = from_chat.invite_link
+                elif hasattr(from_chat, '_type'):
+                    # 检查更多类型
+                    if from_chat._type == 'group':
+                        chat_type = "group"
+                    elif from_chat._type == 'supergroup':
+                        chat_type = "supergroup"
+                    elif from_chat._type == 'gigagroup':
+                        chat_type = "gigagroup"
+                    elif from_chat._type == 'channel':
+                        chat_type = "channel"
+                
+                # 构建source_info
+                source_info = get_text('en', f'chat_type_{chat_type}')
+                if chat_link:
+                    source_info = f"{source_info}\n{chat_link}"
+                
+                forwarded_text = get_text('en', 'forwarded_message_template',
+                    title=channel_title,
+                    source_info=source_info,
+                    separator='_' * 30,
+                    content=message.text
                 )
                 
                 await self.bot.send_message(
                     chat_id=channel_id,
-                    text=forwarded_text
+                    text=forwarded_text,
+                    disable_web_page_preview=True  # 避免预览可能泄露源频道信息
                 )
-                logging.info(f"Successfully sent text message to channel {channel_id}")
+                logging.info(get_text('en', 'text_send_success', channel_id=channel_id))
 
             # 处理媒体消息
             if getattr(message, 'media', None):
@@ -206,13 +241,12 @@ class MyMessageHandler:
                     await self.handle_media_send(message, channel_id, from_chat, 'document')
 
         except Exception as e:
-            logging.error(f"Error in handle_forward_message: {e}")
-            logging.error(f"Full error details: {traceback.format_exc()}")
+            logging.error(get_text('en', 'forward_message_error', error=str(e)))
+            logging.error(get_text('en', 'error_details', details=traceback.format_exc()))
             raise
-
     async def download_progress_callback(self, current, total):
         """下载进度回调"""
         if total:
             percentage = current * 100 / total
             if percentage % 20 == 0:  # 每20%记录一次
-                logging.info(f"Download progress: {percentage:.1f}%")
+                logging.info(get_text('en', 'download_progress', percentage=percentage))
