@@ -83,70 +83,97 @@ class MyMessageHandler:
             logging.error(get_text('en', 'message_handler_error', error=str(e)))
             logging.error(get_text('en', 'error_details', details=traceback.format_exc()))
 
-    async def handle_media_send(self, message, channel_id, from_chat, media_type: str):
+    async def handle_media_send(self, message, channel_id, from_chat, media_type: str, reply_to_message_id: int = None):
         """处理媒体发送并确保清理"""
         tmp = None
         file_path = None
+        chunk_size = 20 * 1024 * 1024  # 20MB 分块，考虑到300MB内存，留出足够空间给系统和其他操作
         
         try:
-            tmp = NamedTemporaryFile(delete=False)
-            file_path = await self.client.download_media(
-                message.media, 
-                file=tmp.name,
-                progress_callback=self.download_progress_callback
-            )
-            
-            if not file_path:
-                raise Exception(get_text('en', 'media_download_failed'))
+            # 获取文件大小
+            file_size = getattr(message.media, 'file_size', 0) or getattr(message.media, 'size', 0)
+            logging.info(f"开始处理文件，大小: {file_size / (1024*1024):.2f}MB")
 
-            caption = get_text('en', 'forwarded_from', channel=getattr(from_chat, 'title', 'Unknown Channel'))
+            # 创建临时文件
+            tmp = NamedTemporaryFile(delete=False, prefix='tg_', suffix=f'.{media_type}')
+            file_path = tmp.name
+
+            # 使用分块下载
+            downloaded_size = 0
+            async for chunk in self.client.iter_download(message.media, chunk_size=chunk_size):
+                if chunk:
+                    tmp.write(chunk)
+                    downloaded_size += len(chunk)
+                    if downloaded_size % (50 * 1024 * 1024) == 0:  # 每50MB记录一次进度
+                        progress = (downloaded_size / file_size) * 100 if file_size else 0
+                        logging.info(f"下载进度: {progress:.1f}% ({downloaded_size/(1024*1024):.1f}MB/{file_size/(1024*1024):.1f}MB)")
+                    
+                    # 每100MB刷新一次缓冲区，减少I/O操作频率
+                    if downloaded_size % (100 * 1024 * 1024) == 0:
+                        tmp.flush()
+                        os.fsync(tmp.fileno())
+
+            tmp.close()
+            logging.info("文件下载完成，准备发送")
             
-            # 记录临时文件
-            self.temp_files[file_path] = datetime.now()
-            
-            # 确保文件存在
             if not os.path.exists(file_path):
                 raise Exception(get_text('en', 'downloaded_file_not_found', file_path=file_path))
 
-            # 发送媒体文件
-            with open(file_path, 'rb') as media_file:
-                if media_type == 'photo':
-                    await self.bot.send_photo(
-                        chat_id=channel_id,
-                        photo=media_file,
-                        caption=caption
-                    )
-                elif media_type == 'video':
-                    await self.bot.send_video(
-                        chat_id=channel_id,
-                        video=media_file,
-                        caption=caption
-                    )
-                elif media_type == 'document':
-                    await self.bot.send_document(
-                        chat_id=channel_id,
-                        document=media_file,
-                        caption=caption
-                    )
-
-            logging.info(get_text('en', 'media_send_success', 
-                                media_type=media_type, 
-                                channel_id=channel_id))
+            # 记录临时文件
+            self.temp_files[file_path] = datetime.now()
             
+            caption = get_text('en', 'forwarded_from', channel=getattr(from_chat, 'title', 'Unknown Channel'))
+            
+            # 发送文件
+            with open(file_path, 'rb') as media_file:
+                try:
+                    file_data = media_file.read()  # 一次性读取，因为有足够内存
+                    if media_type == 'photo':
+                        await self.bot.send_photo(
+                            chat_id=channel_id,
+                            photo=file_data,
+                            caption=caption,
+                            reply_to_message_id=reply_to_message_id
+                        )
+                    elif media_type == 'video':
+                        await self.bot.send_video(
+                            chat_id=channel_id,
+                            video=file_data,
+                            caption=caption,
+                            read_timeout=1800,
+                            write_timeout=1800,
+                            reply_to_message_id=reply_to_message_id
+                        )
+                    elif media_type == 'document':
+                        await self.bot.send_document(
+                            chat_id=channel_id,
+                            document=file_data,
+                            caption=caption,
+                            read_timeout=1800,
+                            write_timeout=1800,
+                            reply_to_message_id=reply_to_message_id
+                        )
+                    logging.info(f"文件发送成功: {media_type}")
+                finally:
+                    del file_data  # 释放内存
+
             # 发送成功后立即删除文件
             await self.cleanup_file(file_path)
             
         except Exception as e:
-            logging.error(get_text('en', 'media_send_error', 
-                                 media_type=media_type, 
-                                 error=str(e)))
+            logging.error(f"处理媒体文件时出错: {str(e)}")
             if file_path:
                 await self.cleanup_file(file_path)
             raise
         finally:
-            # 确保临时文件被关闭
+            # 确保临时文件被关闭和删除
             if tmp and not tmp.closed:
                 tmp.close()
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    logging.error(f"删除临时文件失败: {str(e)}")
 
     async def cleanup_file(self, file_path: str):
         """清理单个文件"""
@@ -173,9 +200,11 @@ class MyMessageHandler:
                 logging.error(get_text('en', 'invalid_channel_id'))
                 return
 
+            forwarded_msg = None
+
             # 尝试直接转发
             try:
-                await self.bot.forward_message(
+                forwarded_msg = await self.bot.forward_message(
                     chat_id=channel_id,
                     from_chat_id=from_chat.id,
                     message_id=message.id
@@ -185,65 +214,55 @@ class MyMessageHandler:
             except Exception as e:
                 logging.warning(get_text('en', 'direct_forward_failed', error=str(e)))
 
-            # 处理文本消息
-            if getattr(message, 'text', None):
+            # 如果直接转发失败，处理文本消息
+            if getattr(message, 'text', None) or getattr(message, 'caption', None):
                 channel_title = getattr(from_chat, 'title', 'Unknown Channel')
                 channel_username = getattr(from_chat, 'username', None)
                 
-                # 获取chat类型和链接
-                chat_type = "private_channel"  # 默认类型
-                chat_link = None
-                
-                # 判断chat类型
-                if hasattr(from_chat, 'username') and from_chat.username:
-                    chat_type = "public_channel"
-                    chat_link = f"@{from_chat.username}"
-                elif hasattr(from_chat, 'invite_link') and from_chat.invite_link:
-                    chat_type = "private_channel_with_link"
-                    chat_link = from_chat.invite_link
-                elif hasattr(from_chat, '_type'):
-                    # 检查更多类型
-                    if from_chat._type == 'group':
-                        chat_type = "group"
-                    elif from_chat._type == 'supergroup':
-                        chat_type = "supergroup"
-                    elif from_chat._type == 'gigagroup':
-                        chat_type = "gigagroup"
-                    elif from_chat._type == 'channel':
-                        chat_type = "channel"
-                
-                # 构建source_info
-                source_info = get_text('en', f'chat_type_{chat_type}')
-                if chat_link:
-                    source_info = f"{source_info}\n{chat_link}"
-                
+                # 构建消息文本
+                content = message.text or message.caption
                 forwarded_text = get_text('en', 'forwarded_message_template',
                     title=channel_title,
-                    source_info=source_info,
+                    username=channel_username or '',
                     separator='_' * 30,
-                    content=message.text
+                    content=content
                 )
                 
-                await self.bot.send_message(
+                # 发送文本消息
+                forwarded_msg = await self.bot.send_message(
                     chat_id=channel_id,
                     text=forwarded_text,
-                    disable_web_page_preview=True  # 避免预览可能泄露源频道信息
+                    disable_web_page_preview=True
                 )
                 logging.info(get_text('en', 'text_send_success', channel_id=channel_id))
 
             # 处理媒体消息
             if getattr(message, 'media', None):
-                if hasattr(message, 'photo') and message.photo:
-                    await self.handle_media_send(message, channel_id, from_chat, 'photo')
-                elif hasattr(message, 'video') and message.video:
-                    await self.handle_media_send(message, channel_id, from_chat, 'video')
-                elif hasattr(message, 'document') and message.document:
-                    await self.handle_media_send(message, channel_id, from_chat, 'document')
+                media_types = []
+                if hasattr(message.media, 'photo'):
+                    media_types.append('photo')
+                elif hasattr(message.media, 'video'):
+                    media_types.append('video')
+                elif hasattr(message.media, 'document'):
+                    media_types.append('document')
+
+                for media_type in media_types:
+                    try:
+                        await self.handle_media_send(
+                            message=message,
+                            channel_id=channel_id,
+                            from_chat=from_chat,
+                            media_type=media_type,
+                            reply_to_message_id=forwarded_msg.message_id if forwarded_msg else None
+                        )
+                    except Exception as e:
+                        logging.error(f"处理{media_type}时出错: {str(e)}")
 
         except Exception as e:
             logging.error(get_text('en', 'forward_message_error', error=str(e)))
             logging.error(get_text('en', 'error_details', details=traceback.format_exc()))
             raise
+
     async def download_progress_callback(self, current, total):
         """下载进度回调"""
         if total:
