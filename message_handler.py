@@ -223,8 +223,25 @@ class MyMessageHandler:
             # 如果直接转发失败，处理文本消息
             if getattr(message, 'text', None) or getattr(message, 'caption', None):
                 content = message.text or message.caption
-                # 简化的转发格式
-                forwarded_text = f"Forwarded from {getattr(from_chat, 'title', 'Unknown Channel')}"
+                # 获取频道类型
+                chat_type = 'chat_type_channel'  # 默认类型
+                if hasattr(from_chat, 'type'):
+                    if from_chat.type == 'channel':
+                        if getattr(from_chat, 'username', None):
+                            chat_type = 'chat_type_public_channel'
+                        else:
+                            chat_type = 'chat_type_private_channel'
+                    elif from_chat.type == 'group':
+                        chat_type = 'chat_type_group'
+                    elif from_chat.type == 'supergroup':
+                        chat_type = 'chat_type_supergroup'
+                    elif from_chat.type == 'gigagroup':
+                        chat_type = 'chat_type_gigagroup'
+
+                # 构建消息头部
+                header = get_text('en', chat_type)
+                forwarded_text = f"{header}\n"
+                forwarded_text += f"Forwarded from {getattr(from_chat, 'title', 'Unknown Channel')}"
                 if getattr(from_chat, 'username', None):
                     forwarded_text += f" (@{from_chat.username})"
                 forwarded_text += f"\n\n{content}"

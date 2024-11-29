@@ -133,13 +133,13 @@ TRANSLATIONS = {
         'invalid_forward': "❌ Please forward a message from the target channel or use the channel selector.",
         'channel_not_found': "❌ Channel not found. Please try again.",
         'forwarded_message_template': "Forwarded from: {title}\n{source_info}\n{separator}\n\n{content}",
-        'chat_type_private_channel': "Private Channel",
-        'chat_type_public_channel': "Public Channel",
-        'chat_type_private_channel_with_link': "Private Channel (Invite Link Available)",
-        'chat_type_group': "Group",
-        'chat_type_supergroup': "Supergroup",
-        'chat_type_gigagroup': "Broadcast Group",
-        'chat_type_channel': "Channel",
+        'chat_type_private_channel': "[Private Channel]",
+        'chat_type_public_channel': "[Public Channel]",
+        'chat_type_private_channel_with_link': "[Private Channel with Link]",
+        'chat_type_group': "[Group]",
+        'chat_type_supergroup': "[Supergroup]",
+        'chat_type_gigagroup': "[Broadcast Group]",
+        'chat_type_channel': "[Channel]",
     },
     'zh': {
         'file_cleanup_success': "已清理文件：{file_path}",
@@ -269,7 +269,14 @@ TRANSLATIONS = {
         'confirm_remove_pair': "确定要删除此转发配对吗？\n\n监控频道: {monitor}\n转发频道: {forward}",
         'pair_removed_success': "✅ 转发配对已成功删除",
         'back_to_pairs_management': "返回配对管理",
-        'confirm_remove': "✅ 确认删除"
+        'confirm_remove': "✅ 确认删除",
+        'chat_type_private_channel': "[私有频道]",
+        'chat_type_public_channel': "[公开频道]",
+        'chat_type_private_channel_with_link': "[带链接的私有频道]",
+        'chat_type_group': "[群组]",
+        'chat_type_supergroup': "[超级群组]",
+        'chat_type_gigagroup': "[广播群组]",
+        'chat_type_channel': "[频道]",
     }
 }
 
