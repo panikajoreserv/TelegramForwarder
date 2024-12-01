@@ -148,14 +148,24 @@ class MyMessageHandler:
                         video = message.media.video
                         send_kwargs.update({
                             'video': file_data,
-                            'width': video.width,
-                            'height': video.height,
-                            'duration': video.duration,
                             'supports_streaming': True
                         })
+                        
+                        # 安全地获取视频参数
+                        if hasattr(video, 'width') and video.width:
+                            send_kwargs['width'] = video.width
+                        if hasattr(video, 'height') and video.height:
+                            send_kwargs['height'] = video.height
+                        if hasattr(video, 'duration') and video.duration:
+                            send_kwargs['duration'] = video.duration
+                            
                         # 如果有缩略图
                         if hasattr(video, 'thumb') and video.thumb:
-                            send_kwargs['thumb'] = await self.client.download_media(video.thumb)
+                            try:
+                                send_kwargs['thumb'] = await self.client.download_media(video.thumb)
+                            except Exception as e:
+                                logging.warning(f"无法下载视频缩略图: {str(e)}")
+                                
                         await self.bot.send_video(**send_kwargs)
                     elif media_type == 'document':
                         # 获取文件名
