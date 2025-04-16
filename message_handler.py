@@ -8,6 +8,7 @@ from typing import Optional, BinaryIO, Dict, List, Any, Tuple
 from tempfile import NamedTemporaryFile
 import asyncio
 from datetime import datetime, timedelta, time
+from telegram import error as telegram_error
 from locales import get_text
 
 class MyMessageHandler:
@@ -19,6 +20,10 @@ class MyMessageHandler:
         self.temp_files = {}
         # 启动清理任务
         self.cleanup_task = None
+        # 媒体缓存
+        self.media_cache = {}
+        # 已处理的媒体组
+        self.processed_media_groups = set()
 
     async def start_cleanup_task(self):
         """启动定期清理任务"""
@@ -47,11 +52,70 @@ class MyMessageHandler:
                 for file_path in files_to_remove:
                     self.temp_files.pop(file_path, None)
 
+                # 清理媒体缓存
+                media_ids_to_remove = []
+                for media_id, media_info in list(self.media_cache.items()):
+                    if current_time - media_info.get('timestamp', current_time) > timedelta(minutes=10):  # 10分钟后清理
+                        media_ids_to_remove.append(media_id)
+
+                # 从缓存中移除过期的媒体
+                for media_id in media_ids_to_remove:
+                    self.media_cache.pop(media_id, None)
+
+                # 清理已处理的媒体组
+                self.processed_media_groups.clear()
+
             except Exception as e:
                 logging.error(get_text('en', 'cleanup_task_error', error=str(e)))
 
             # 每小时运行一次
             await asyncio.sleep(3600)
+
+    async def clear_media_cache(self, media_id, delay_seconds=600):
+        """延迟清理媒体缓存"""
+        await asyncio.sleep(delay_seconds)
+        if media_id in self.media_cache:
+            self.media_cache.pop(media_id, None)
+            logging.info(f"媒体缓存已清理: {media_id}")
+
+    def get_media_id(self, message) -> str:
+        """获取媒体文件的唯一标识"""
+        try:
+            # 尝试不同的属性来生成唯一ID
+            if hasattr(message.media, 'photo'):
+                photo = message.media.photo
+                return f"photo_{photo.id}_{photo.access_hash}"
+            elif hasattr(message.media, 'document'):
+                doc = message.media.document
+                return f"document_{doc.id}_{doc.access_hash}"
+            elif hasattr(message.media, 'video'):
+                video = message.media.video
+                return f"video_{video.id}_{video.access_hash}"
+            else:
+                # 如果无法获取特定属性，使用消息的唯一标识
+                return f"media_{message.chat_id}_{message.id}"
+        except Exception as e:
+            logging.error(f"获取媒体ID时出错: {str(e)}")
+            # 如果出错，使用消息的唯一标识
+            return f"media_{message.chat_id}_{message.id}"
+
+    def get_media_type(self, message) -> str:
+        """获取媒体类型"""
+        if hasattr(message.media, 'photo'):
+            return 'photo'
+        elif hasattr(message.media, 'document'):
+            # 检查是否是贴图
+            if hasattr(message.media.document, 'attributes'):
+                for attr in message.media.document.attributes:
+                    if hasattr(attr, 'CONSTRUCTOR_ID') and attr.CONSTRUCTOR_ID == 0x6319d612:  # DocumentAttributeSticker
+                        return 'sticker'
+                    elif hasattr(attr, '__class__') and 'DocumentAttributeSticker' in str(attr.__class__):
+                        return 'sticker'
+            return 'document'
+        elif hasattr(message.media, 'video'):
+            return 'video'
+        else:
+            return 'unknown'
 
     async def handle_channel_message(self, event):
         """处理频道消息"""
@@ -215,52 +279,28 @@ class MyMessageHandler:
             logging.error(f"匹配规则时出错: {e}")
             return False
 
-    async def handle_media_send(self, message, channel_id, from_chat, media_type: str, reply_to_message_id: int = None):
+    async def handle_media_send(self, message, channel_id, media_type: str = None, reply_to_message_id: int = None, from_chat = None):
         """处理媒体发送并确保清理"""
-        tmp = None
-        file_path = None
-        chunk_size = 20 * 1024 * 1024  # 20MB 分块
+        # 下载媒体文件
+        media_info = await self.download_media_file(message, media_type)
+        if not media_info:
+            logging.error("媒体文件下载失败")
+            return
+
+        file_path = media_info.get('file_path')
+        media_type = media_info.get('media_type')
 
         try:
-            # 获取文件大小
-            file_size = getattr(message.media, 'file_size', 0) or getattr(message.media, 'size', 0)
-            logging.info(f"开始处理文件，大小: {file_size / (1024*1024):.2f}MB")
-
-            # 创建临时文件
-            tmp = NamedTemporaryFile(delete=False, prefix='tg_', suffix=f'.{media_type}')
-            file_path = tmp.name
-
-            # 使用分块下载
-            downloaded_size = 0
-            async for chunk in self.client.iter_download(message.media, chunk_size=chunk_size):
-                if chunk:
-                    tmp.write(chunk)
-                    downloaded_size += len(chunk)
-                    if downloaded_size % (50 * 1024 * 1024) == 0:
-                        progress = (downloaded_size / file_size) * 100 if file_size else 0
-                        logging.info(f"下载进度: {progress:.1f}% ({downloaded_size/(1024*1024):.1f}MB/{file_size/(1024*1024):.1f}MB)")
-
-                    if downloaded_size % (100 * 1024 * 1024) == 0:
-                        tmp.flush()
-                        os.fsync(tmp.fileno())
-
-            tmp.close()
-            logging.info("文件下载完成，准备发送")
-
-            if not os.path.exists(file_path):
-                raise Exception(get_text('en', 'downloaded_file_not_found', file_path=file_path))
-
-            # 记录临时文件
-            self.temp_files[file_path] = datetime.now()
-
             # 只有在没有回复消息时才添加说明文字
             caption = None
-            if not reply_to_message_id:
+            if not reply_to_message_id and from_chat:
                 # 构建用户名部分
                 username = f"(@{from_chat.username})" if getattr(from_chat, 'username', None) else ""
 
                 # 使用简化的模板作为媒体文件的标题
                 caption = f"📨 转发自 {getattr(from_chat, 'title', 'Unknown Channel')} {username}"
+            elif message.text or message.caption:
+                caption = message.text or message.caption
 
             # 发送文件
             with open(file_path, 'rb') as media_file:
@@ -280,64 +320,57 @@ class MyMessageHandler:
                         send_kwargs['photo'] = file_data
                         await self.bot.send_photo(**send_kwargs)
                     elif media_type == 'video':
-                        # 获取原始视频的参数
-                        video = message.media.video
                         send_kwargs.update({
                             'video': file_data,
                             'supports_streaming': True
                         })
 
-                        # 安全地获取视频参数
-                        if hasattr(video, 'width') and video.width:
-                            send_kwargs['width'] = video.width
-                        if hasattr(video, 'height') and video.height:
-                            send_kwargs['height'] = video.height
-                        if hasattr(video, 'duration') and video.duration:
-                            send_kwargs['duration'] = video.duration
+                        # 添加视频参数
+                        if 'width' in media_info:
+                            send_kwargs['width'] = media_info['width']
+                        if 'height' in media_info:
+                            send_kwargs['height'] = media_info['height']
+                        if 'duration' in media_info:
+                            send_kwargs['duration'] = media_info['duration']
 
                         # 如果有缩略图
-                        if hasattr(video, 'thumb') and video.thumb:
-                            try:
-                                send_kwargs['thumb'] = await self.client.download_media(video.thumb)
-                            except Exception as e:
-                                logging.warning(f"无法下载视频缩略图: {str(e)}")
+                        if 'thumb_path' in media_info and os.path.exists(media_info['thumb_path']):
+                            with open(media_info['thumb_path'], 'rb') as thumb_file:
+                                send_kwargs['thumb'] = thumb_file.read()
 
                         await self.bot.send_video(**send_kwargs)
+
+                        # 清理缩略图
+                        if 'thumb_path' in media_info and os.path.exists(media_info['thumb_path']):
+                            os.remove(media_info['thumb_path'])
+
                     elif media_type == 'document':
-                        # 获取文件名
-                        if hasattr(message.media.document, 'attributes'):
-                            for attr in message.media.document.attributes:
-                                if hasattr(attr, 'file_name'):
-                                    send_kwargs['filename'] = attr.file_name
-                                    break
                         send_kwargs['document'] = file_data
+                        if 'filename' in media_info:
+                            send_kwargs['filename'] = media_info['filename']
                         await self.bot.send_document(**send_kwargs)
+                    elif media_type == 'sticker':
+                        # 发送贴图
+                        await self.bot.send_sticker(
+                            chat_id=channel_id,
+                            sticker=file_data,
+                            reply_to_message_id=reply_to_message_id
+                        )
 
                     logging.info(f"文件发送成功: {media_type}" +
                            (f" (回复到消息: {reply_to_message_id})" if reply_to_message_id else ""))
                 finally:
                     del file_data  # 释放内存
-                    # 清理缩略图
-                    if 'thumb' in send_kwargs and os.path.exists(send_kwargs['thumb']):
-                        os.remove(send_kwargs['thumb'])
 
-            # 发送成功后立即删除文件
+            # 发送成功后清理文件
             await self.cleanup_file(file_path)
+            return True
 
         except Exception as e:
             logging.error(f"处理媒体文件时出错: {str(e)}")
             if file_path:
                 await self.cleanup_file(file_path)
-            raise
-        finally:
-            # 确保临时文件被关闭和删除
-            if tmp and not tmp.closed:
-                tmp.close()
-            if file_path and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except Exception as e:
-                    logging.error(f"删除临时文件失败: {str(e)}")
+            return False
 
     async def handle_forward_message(self, message, from_chat, to_channel):
         """处理消息转发"""
@@ -347,22 +380,67 @@ class MyMessageHandler:
 
         try:
             channel_id = to_channel.get('channel_id')
-            channel_id = int("-100"+str(channel_id))
             if not channel_id:
                 logging.error(get_text('en', 'invalid_channel_id'))
                 return
+
+            try:
+                channel_id = int("-100"+str(channel_id))
+            except ValueError as e:
+                logging.error(f"频道ID格式错误: {channel_id}, 错误: {e}")
+                return
+
+            # 检查是否是回复消息
+            reply_to_message_id = None
+            original_reply_message = None
+
+            if hasattr(message, 'reply_to_msg_id') and message.reply_to_msg_id:
+                try:
+                    # 获取原始回复消息
+                    original_reply_message = await self.client.get_messages(from_chat.id, ids=message.reply_to_msg_id)
+
+                    # 在数据库中查找这条消息是否已经转发过
+                    forwarded_reply = self.db.get_forwarded_message(from_chat.id, message.reply_to_msg_id, channel_id)
+                    if forwarded_reply:
+                        # 如果找到了转发的回复消息，使用其ID作为回复ID
+                        reply_to_message_id = forwarded_reply['forwarded_message_id']
+                        logging.info(f"找到原始回复消息的转发记录，将使用原生回复: {reply_to_message_id}")
+                except Exception as e:
+                    logging.warning(f"获取原始回复消息失败: {e}")
 
             forwarded_msg = None
 
             # 尝试直接转发
             try:
-                forwarded_msg = await self.bot.forward_message(
-                    chat_id=channel_id,
-                    from_chat_id=from_chat.id,
-                    message_id=message.id
-                )
-                logging.info(get_text('en', 'forward_success', channel_id=channel_id))
-                return
+                # 如果有原生回复消息的ID，使用原生回复
+                if reply_to_message_id:
+                    forwarded_msg = await self.bot.copy_message(
+                        chat_id=channel_id,
+                        from_chat_id=from_chat.id,
+                        message_id=message.id,
+                        reply_to_message_id=reply_to_message_id
+                    )
+                    # 保存转发关系
+                    self.db.save_forwarded_message(from_chat.id, message.id, channel_id, forwarded_msg.message_id)
+                    logging.info(f"使用原生回复成功转发消息到 {channel_id}")
+                    return
+                else:
+                    # 尝试直接转发
+                    forwarded_msg = await self.bot.forward_message(
+                        chat_id=channel_id,
+                        from_chat_id=from_chat.id,
+                        message_id=message.id
+                    )
+                    # 保存转发关系
+                    self.db.save_forwarded_message(from_chat.id, message.id, channel_id, forwarded_msg.message_id)
+                    logging.info(get_text('en', 'forward_success', channel_id=channel_id))
+                    return
+            except telegram_error.BadRequest as e:
+                if "Chat not found" in str(e):
+                    logging.error(f"频道 {channel_id} 不存在或机器人无法访问，请检查权限或频道ID")
+                    return
+                else:
+                    logging.warning(get_text('en', 'direct_forward_failed', error=str(e)))
             except Exception as e:
                 logging.warning(get_text('en', 'direct_forward_failed', error=str(e)))
 
@@ -398,7 +476,7 @@ class MyMessageHandler:
 
                 # 检查是否是回复消息
                 reply_text = ""
-                if hasattr(message, 'reply_to_msg_id') and message.reply_to_msg_id:
+                if hasattr(message, 'reply_to_msg_id') and message.reply_to_msg_id and not reply_to_message_id:
                     try:
                         # 尝试获取原始回复消息
                         reply_msg = await self.client.get_messages(from_chat.id, ids=message.reply_to_msg_id)
@@ -419,126 +497,80 @@ class MyMessageHandler:
                                          content=reply_text + content)
 
                 # 检查是否有自定义表情
-                has_custom_emoji = await self.handle_custom_emoji(message, channel_id)
+                await self.handle_custom_emoji(message, channel_id)
 
                 # 发送文本消息，支持Markdown格式
                 try:
-                    forwarded_msg = await self.bot.send_message(
-                        chat_id=channel_id,
-                        text=forwarded_text,
-                        parse_mode='Markdown',
-                        disable_web_page_preview=True
-                    )
+                    # 如果有原生回复消息的ID，使用原生回复
+                    send_kwargs = {
+                        'chat_id': channel_id,
+                        'text': forwarded_text,
+                        'parse_mode': 'Markdown',
+                        'disable_web_page_preview': True
+                    }
+
+                    if reply_to_message_id:
+                        send_kwargs['reply_to_message_id'] = reply_to_message_id
+
+                    forwarded_msg = await self.bot.send_message(**send_kwargs)
+
+                    # 保存转发关系
+                    self.db.save_forwarded_message(from_chat.id, message.id, channel_id, forwarded_msg.message_id)
+
                 except Exception as e:
                     # 如果Markdown解析失败，尝试使用纯文本
                     logging.warning(f"使用Markdown发送消息失败: {e}")
-                    forwarded_msg = await self.bot.send_message(
-                        chat_id=channel_id,
-                        text=forwarded_text,
-                        parse_mode=None,
-                        disable_web_page_preview=True
-                    )
+                    send_kwargs = {
+                        'chat_id': channel_id,
+                        'text': forwarded_text,
+                        'parse_mode': None,
+                        'disable_web_page_preview': True
+                    }
+
+                    if reply_to_message_id:
+                        send_kwargs['reply_to_message_id'] = reply_to_message_id
+
+                    forwarded_msg = await self.bot.send_message(**send_kwargs)
+
+                    # 保存转发关系
+                    self.db.save_forwarded_message(from_chat.id, message.id, channel_id, forwarded_msg.message_id)
+
                 logging.info(get_text('en', 'text_send_success', channel_id=channel_id))
 
-            # 处理媒体消息
+            # 异步处理媒体消息
             if getattr(message, 'media', None) and forwarded_msg:
-                # 在消息中添加“正在加载媒体”的提示
-                loading_text = forwarded_text + "\n\n⚙️ *正在加载媒体文件...*"
-                try:
-                    # 更新消息以显示加载状态
-                    await self.bot.edit_message_text(
-                        chat_id=channel_id,
-                        message_id=forwarded_msg.message_id,
-                        text=loading_text,
-                        parse_mode='Markdown',
-                        disable_web_page_preview=True
-                    )
-                except Exception as e:
-                    logging.warning(f"更新消息状态失败: {e}")
 
+                # 检查是否是媒体组
+                if hasattr(message, 'grouped_id') and message.grouped_id:
+                    # 异步处理媒体组
+                    asyncio.create_task(self.handle_media_group(
+                        message=message,
+                        channel_id=channel_id,
+                        reply_to_message_id=forwarded_msg.message_id
+                    ))
+                    return
+                    
                 # 确定媒体类型
-                media_types = []
-                is_sticker = False
-
-                # 检查是否是贴图
-                if hasattr(message.media, 'document') and hasattr(message.media.document, 'attributes'):
-                    for attr in message.media.document.attributes:
-                        if hasattr(attr, 'CONSTRUCTOR_ID') and attr.CONSTRUCTOR_ID == 0x6319d612:  # DocumentAttributeSticker
-                            is_sticker = True
-                            break
-                        # 检查属性名称
-                        elif hasattr(attr, '__class__') and 'DocumentAttributeSticker' in str(attr.__class__):
-                            is_sticker = True
-                            break
-
-                if is_sticker:
-                    media_types.append('sticker')
-                elif hasattr(message.media, 'photo'):
-                    media_types.append('photo')
-                elif hasattr(message.media, 'video'):
-                    media_types.append('video')
-                elif hasattr(message.media, 'document'):
-                    media_types.append('document')
-
-                # 如果有媒体，尝试下载并编辑原消息
-                if media_types:
-                    try:
-                        # 下载媒体文件
-                        if media_types[0] == 'sticker':
-                            # 对于贴图，使用特殊处理
-                            await self.handle_sticker_send(
-                                message=message,
-                                channel_id=channel_id,
-                                from_chat=from_chat,
-                                reply_to_message_id=forwarded_msg.message_id if forwarded_msg else None
-                            )
-                            # 删除原消息，因为贴图已经发送
-                            try:
-                                await self.bot.delete_message(
-                                    chat_id=channel_id,
-                                    message_id=forwarded_msg.message_id
-                                )
-                            except Exception as e:
-                                logging.warning(f"删除原消息失败: {e}")
-                            # 跳过后续处理
-                            return
-                        else:
-                            media_info = await self.download_media_file(message, media_types[0])
-
-                        if media_info and media_info.get('file_path'):
-                            # 尝试编辑原消息以包含媒体
-                            await self.edit_message_with_media(
-                                channel_id=channel_id,
-                                message_id=forwarded_msg.message_id,
-                                text=forwarded_text,
-                                media_path=media_info.get('file_path'),
-                                media_type=media_types[0],
-                                media_info=media_info
-                            )
-                        else:
-                            # 如果媒体下载失败，恢复原消息
-                            await self.bot.edit_message_text(
-                                chat_id=channel_id,
-                                message_id=forwarded_msg.message_id,
-                                text=forwarded_text + "\n\n⚠️ *媒体文件加载失败*",
-                                parse_mode='Markdown',
-                                disable_web_page_preview=True
-                            )
-                    except Exception as e:
-                        logging.error(f"处理媒体文件时出错: {str(e)}")
-                        # 如果编辑失败，尝试发送单独的媒体消息
-                        try:
-                            for media_type in media_types:
-                                await self.handle_media_send(
-                                    message=message,
-                                    channel_id=channel_id,
-                                    from_chat=from_chat,
-                                    media_type=media_type,
-                                    reply_to_message_id=forwarded_msg.message_id
-                                )
-                        except Exception as e2:
-                            logging.error(f"备用方法发送媒体失败: {str(e2)}")
-
+                media_type = self.get_media_type(message)
+                
+                # 如果是贴图，使用特殊处理
+                if media_type == 'sticker':
+                    asyncio.create_task(self.handle_sticker_send(
+                        message=message,
+                        channel_id=channel_id,
+                        from_chat=from_chat,
+                        reply_to_message_id=forwarded_msg.message_id
+                    ))
+                    return
+                    
+                # 异步处理媒体文件
+                asyncio.create_task(self.handle_media_send(
+                    message=message,
+                    channel_id=channel_id,
+                    media_type=media_type,
+                    reply_to_message_id=forwarded_msg.message_id,
+                    from_chat=from_chat
+                ))
         except Exception as e:
             logging.error(get_text('en', 'forward_message_error', error=str(e)))
             logging.error(get_text('en', 'error_details', details=traceback.format_exc()))
@@ -664,8 +696,20 @@ class MyMessageHandler:
             logging.error(f"处理消息删除事件时出错: {str(e)}")
             logging.error(f"错误详情: {traceback.format_exc()}")
 
-    async def download_media_file(self, message, media_type: str) -> dict:
+    async def download_media_file(self, message, media_type: str = None) -> dict:
         """下载媒体文件并返回相关信息"""
+        # 如果没有指定媒体类型，自动检测
+        if media_type is None:
+            media_type = self.get_media_type(message)
+
+        # 生成媒体ID
+        media_id = self.get_media_id(message)
+
+        # 检查缓存
+        if media_id in self.media_cache:
+            logging.info(f"使用缓存的媒体文件: {media_id}")
+            return self.media_cache[media_id]
+
         tmp = None
         file_path = None
         chunk_size = 20 * 1024 * 1024  # 20MB 分块
@@ -706,7 +750,8 @@ class MyMessageHandler:
             media_info = {
                 'file_path': file_path,
                 'file_size': file_size,
-                'media_type': media_type
+                'media_type': media_type,
+                'timestamp': datetime.now()
             }
 
             # 收集特定媒体类型的额外信息
@@ -735,6 +780,12 @@ class MyMessageHandler:
                             media_info['filename'] = attr.file_name
                             break
 
+            # 将结果存入缓存
+            self.media_cache[media_id] = media_info
+
+            # 设置缓存过期时间（例妈10分钟后自动清理）
+            asyncio.create_task(self.clear_media_cache(media_id, 600))
+
             return media_info
 
         except Exception as e:
@@ -742,6 +793,163 @@ class MyMessageHandler:
             if file_path and file_path in self.temp_files:
                 await self.cleanup_file(file_path)
             return None
+
+    async def handle_media_group(self, message, channel_id, reply_to_message_id=None):
+        """处理媒体组（多张图片或视频）"""
+        try:
+            # 获取媒体组ID
+            group_id = getattr(message, 'grouped_id', None)
+            if not group_id:
+                # 如果不是媒体组，使用普通媒体处理
+                media_type = self.get_media_type(message)
+                await self.handle_media_send(message, channel_id, media_type, reply_to_message_id=reply_to_message_id)
+                return
+
+            # 检查是否已经处理过这个媒体组
+            if group_id in self.processed_media_groups:
+                logging.info(f"媒体组 {group_id} 已经处理过，跳过")
+                return
+
+            # 标记为已处理
+            self.processed_media_groups.add(group_id)
+
+            # 获取同一组的所有媒体消息
+            media_messages = await self.client.get_messages(
+                message.chat_id,
+                limit=10,  # 合理的限制
+                offset_id=message.id,
+                reverse=True
+            )
+
+            # 过滤出同一组的媒体
+            group_media = [msg for msg in media_messages if hasattr(msg, 'grouped_id') and msg.grouped_id == group_id]
+
+            # 准备媒体列表
+            media_list = []
+            for msg in group_media:
+                media_type = self.get_media_type(msg)
+                media_info = await self.download_media_file(msg, media_type)
+                if media_info:
+                    media_list.append({
+                        'type': media_type,
+                        'path': media_info['file_path'],
+                        'caption': msg.text or msg.caption,
+                        'media_info': media_info
+                    })
+
+            # 发送媒体组
+            if media_list:
+                await self.send_media_group(channel_id, media_list, reply_to_message_id)
+
+        except Exception as e:
+            logging.error(f"处理媒体组时出错: {str(e)}")
+            logging.error(traceback.format_exc())
+
+    async def send_media_group(self, channel_id, media_list, reply_to_message_id=None):
+        """发送媒体组"""
+        try:
+            # 如果只有一个媒体文件，使用单个发送
+            if len(media_list) == 1:
+                media = media_list[0]
+                with open(media['path'], 'rb') as media_file:
+                    file_data = media_file.read()
+                    send_kwargs = {
+                        'chat_id': channel_id,
+                        'caption': media['caption'],
+                        'read_timeout': 1800,
+                        'write_timeout': 1800
+                    }
+
+                    if reply_to_message_id:
+                        send_kwargs['reply_to_message_id'] = reply_to_message_id
+
+                    if media['type'] == 'photo':
+                        send_kwargs['photo'] = file_data
+                        await self.bot.send_photo(**send_kwargs)
+                    elif media['type'] == 'video':
+                        send_kwargs['video'] = file_data
+                        send_kwargs['supports_streaming'] = True
+
+                        # 添加视频参数
+                        media_info = media['media_info']
+                        if 'width' in media_info:
+                            send_kwargs['width'] = media_info['width']
+                        if 'height' in media_info:
+                            send_kwargs['height'] = media_info['height']
+                        if 'duration' in media_info:
+                            send_kwargs['duration'] = media_info['duration']
+
+                        await self.bot.send_video(**send_kwargs)
+                    elif media['type'] == 'document':
+                        send_kwargs['document'] = file_data
+                        if 'filename' in media['media_info']:
+                            send_kwargs['filename'] = media['media_info']['filename']
+                        await self.bot.send_document(**send_kwargs)
+
+            # 如果有多个媒体文件，使用媒体组发送
+            else:
+                # 准备媒体输入列表
+                input_media = []
+                for i, media in enumerate(media_list):
+                    with open(media['path'], 'rb') as media_file:
+                        file_data = media_file.read()
+                        media_dict = {
+                            'type': media['type'],
+                            'media': file_data,
+                            'caption': media['caption'] if i == 0 else None  # 只在第一个媒体上显示标题
+                        }
+                        input_media.append(media_dict)
+
+                # 发送媒体组
+                await self.bot.send_media_group(
+                    chat_id=channel_id,
+                    media=input_media,
+                    reply_to_message_id=reply_to_message_id,
+                    read_timeout=1800,
+                    write_timeout=1800
+                )
+
+            # 清理媒体文件
+            for media in media_list:
+                await self.cleanup_file(media['path'])
+
+            logging.info(f"媒体组发送成功，共 {len(media_list)} 个文件")
+
+        except Exception as e:
+            logging.error(f"发送媒体组时出错: {str(e)}")
+            logging.error(traceback.format_exc())
+
+            # 如果失败，尝试逐个发送
+            try:
+                for media in media_list:
+                    with open(media['path'], 'rb') as media_file:
+                        file_data = media_file.read()
+                        send_kwargs = {
+                            'chat_id': channel_id,
+                            'caption': media['caption'],
+                            'reply_to_message_id': reply_to_message_id,
+                            'read_timeout': 1800,
+                            'write_timeout': 1800
+                        }
+
+                        if media['type'] == 'photo':
+                            send_kwargs['photo'] = file_data
+                            await self.bot.send_photo(**send_kwargs)
+                        elif media['type'] == 'video':
+                            send_kwargs['video'] = file_data
+                            await self.bot.send_video(**send_kwargs)
+                        elif media['type'] == 'document':
+                            send_kwargs['document'] = file_data
+                            await self.bot.send_document(**send_kwargs)
+
+                    # 清理媒体文件
+                    await self.cleanup_file(media['path'])
+
+            except Exception as e2:
+                logging.error(f"备用方法发送媒体失败: {str(e2)}")
+                # 清理媒体文件
+                for media in media_list:
+                    await self.cleanup_file(media['path'])
 
     async def handle_sticker_send(self, message, channel_id, from_chat, reply_to_message_id=None):
         """处理贴图发送"""
@@ -806,8 +1014,10 @@ class MyMessageHandler:
         """处理自定义表情"""
         try:
             # 检查消息中的自定义表情实体
-            if hasattr(message, 'entities'):
-                has_custom_emoji = False
+            has_custom_emoji = False
+
+            # 检查 entities 属性
+            if hasattr(message, 'entities') and message.entities:
                 for entity in message.entities:
                     if hasattr(entity, 'CONSTRUCTOR_ID') and entity.CONSTRUCTOR_ID == 0x81ccf4d:  # MessageEntityCustomEmoji
                         has_custom_emoji = True
@@ -816,13 +1026,23 @@ class MyMessageHandler:
                         has_custom_emoji = True
                         break
 
-                if has_custom_emoji:
-                    logging.info(f"检测到自定义表情，添加提示消息")
-                    await self.bot.send_message(
-                        chat_id=channel_id,
-                        text="ℹ️ 原消息包含自定义表情，可能无法完全显示。"
-                    )
-                    return True
+            # 检查 caption_entities 属性
+            if not has_custom_emoji and hasattr(message, 'caption_entities') and message.caption_entities:
+                for entity in message.caption_entities:
+                    if hasattr(entity, 'CONSTRUCTOR_ID') and entity.CONSTRUCTOR_ID == 0x81ccf4d:  # MessageEntityCustomEmoji
+                        has_custom_emoji = True
+                        break
+                    elif hasattr(entity, '__class__') and 'MessageEntityCustomEmoji' in str(entity.__class__):
+                        has_custom_emoji = True
+                        break
+
+            if has_custom_emoji:
+                logging.info(f"检测到自定义表情，添加提示消息")
+                await self.bot.send_message(
+                    chat_id=channel_id,
+                    text="ℹ️ 原消息包含自定义表情，可能无法完全显示。"
+                )
+                return True
             return False
         except Exception as e:
             logging.error(f"处理自定义表情时出错: {str(e)}")
