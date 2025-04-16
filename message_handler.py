@@ -385,9 +385,20 @@ class MyMessageHandler:
                 return
 
             try:
-                # 恢复原来的处理方式，但添加更多日志
+                # 尝试修复频道ID处理问题
                 original_channel_id = channel_id
-                channel_id = int("-100"+str(channel_id))
+                channel_id_str = str(channel_id)
+
+                # 如果已经是完整的频道ID，直接使用
+                if channel_id_str.startswith('-100'):
+                    channel_id = int(channel_id_str)
+                # 如果是纯数字或者不带-100前缀的负数，添加-100前缀
+                else:
+                    # 如果是负数，先去掉负号
+                    if channel_id_str.startswith('-'):
+                        channel_id_str = channel_id_str[1:]
+                    channel_id = int("-100" + channel_id_str)
+
                 logging.info(f"处理频道ID: 原始值={original_channel_id}, 处理后={channel_id}")
             except ValueError as e:
                 logging.error(f"频道ID格式错误: {channel_id}, 错误: {e}")
@@ -639,9 +650,20 @@ class MyMessageHandler:
             # 向所有转发频道发送编辑通知
             for channel in forward_channels:
                 try:
-                    # 恢复原来的处理方式，但添加更多日志
+                    # 尝试修复频道ID处理问题
                     original_channel_id = channel.get('channel_id')
-                    channel_id = int("-100" + str(original_channel_id))
+                    channel_id_str = str(original_channel_id)
+
+                    # 如果已经是完整的频道ID，直接使用
+                    if channel_id_str.startswith('-100'):
+                        channel_id = int(channel_id_str)
+                    # 如果是纯数字或者不带-100前缀的负数，添加-100前缀
+                    else:
+                        # 如果是负数，先去掉负号
+                        if channel_id_str.startswith('-'):
+                            channel_id_str = channel_id_str[1:]
+                        channel_id = int("-100" + channel_id_str)
+
                     logging.info(f"处理频道ID(编辑消息): 原始值={original_channel_id}, 处理后={channel_id}")
 
                     # 尝试找到原始消息的转发消息，以便以回复形式发送编辑通知
@@ -707,9 +729,20 @@ class MyMessageHandler:
             # 向所有转发频道发送删除通知
             for channel in forward_channels:
                 try:
-                    # 恢复原来的处理方式，但添加更多日志
+                    # 尝试修复频道ID处理问题
                     original_channel_id = channel.get('channel_id')
-                    channel_id = int("-100" + str(original_channel_id))
+                    channel_id_str = str(original_channel_id)
+
+                    # 如果已经是完整的频道ID，直接使用
+                    if channel_id_str.startswith('-100'):
+                        channel_id = int(channel_id_str)
+                    # 如果是纯数字或者不带-100前缀的负数，添加-100前缀
+                    else:
+                        # 如果是负数，先去掉负号
+                        if channel_id_str.startswith('-'):
+                            channel_id_str = channel_id_str[1:]
+                        channel_id = int("-100" + channel_id_str)
+
                     logging.info(f"处理频道ID(删除消息): 原始值={original_channel_id}, 处理后={channel_id}")
 
                     # 尝试找到原始消息的转发消息，以便以回复形式发送删除通知

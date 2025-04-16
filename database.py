@@ -591,9 +591,20 @@ class Database:
             logging.error(f"Error adding filter rule: {e}")
             return False
 
-    def get_filter_rules(self, pair_id: str) -> List[Dict]:
-        """获取指定频道配对的过滤规则"""
+    def get_filter_rules(self, pair_id: str = None, monitor_id: int = None, forward_id: int = None) -> List[Dict]:
+        """获取指定频道配对的过滤规则
+
+        可以使用pair_id或者monitor_id+forward_id的组合来查询
+        """
         try:
+            # 如果提供了monitor_id和forward_id，生成pair_id
+            if pair_id is None and monitor_id is not None and forward_id is not None:
+                pair_id = f"{monitor_id}:{forward_id}"
+
+            if pair_id is None:
+                logging.error("get_filter_rules: 需要提供pair_id或者monitor_id+forward_id")
+                return []
+
             self.cursor.execute(
                 "SELECT * FROM filter_rules WHERE pair_id = ? AND is_active = 1",
                 (pair_id,)
@@ -651,9 +662,20 @@ class Database:
             logging.error(f"Error adding time filter: {e}")
             return False
 
-    def get_time_filters(self, pair_id: str) -> List[Dict]:
-        """获取指定频道配对的时间过滤器"""
+    def get_time_filters(self, pair_id: str = None, monitor_id: int = None, forward_id: int = None) -> List[Dict]:
+        """获取指定频道配对的时间过滤器
+
+        可以使用pair_id或者monitor_id+forward_id的组合来查询
+        """
         try:
+            # 如果提供了monitor_id和forward_id，生成pair_id
+            if pair_id is None and monitor_id is not None and forward_id is not None:
+                pair_id = f"{monitor_id}:{forward_id}"
+
+            if pair_id is None:
+                logging.error("get_time_filters: 需要提供pair_id或者monitor_id+forward_id")
+                return []
+
             self.cursor.execute(
                 "SELECT * FROM time_filters WHERE pair_id = ? AND is_active = 1",
                 (pair_id,)
@@ -795,30 +817,7 @@ class Database:
             logging.error(f"添加过滤规则失败: {e}")
             return False
 
-    def get_filter_rules(self, monitor_id: int, forward_id: int) -> List[Dict]:
-        """获取特定频道对的过滤规则"""
-        try:
-            pair_id = f"{monitor_id}:{forward_id}"
-            self.cursor.execute('''
-                SELECT rule_id, rule_type, filter_mode, pattern, is_active
-                FROM filter_rules
-                WHERE pair_id = ? AND is_active = 1
-                ORDER BY rule_id
-            ''', (pair_id,))
-
-            rules = []
-            for row in self.cursor.fetchall():
-                rules.append({
-                    'rule_id': row[0],
-                    'rule_type': row[1],
-                    'filter_mode': row[2],
-                    'pattern': row[3],
-                    'is_active': bool(row[4])
-                })
-            return rules
-        except Exception as e:
-            logging.error(f"获取过滤规则失败: {e}")
-            return []
+    # 已经合并到上面的get_filter_rules方法中
 
     def update_filter_rule(self, rule_id: int, rule_type: str = None, filter_mode: str = None,
                           pattern: str = None, is_active: bool = None) -> bool:
@@ -884,31 +883,7 @@ class Database:
             logging.error(f"添加时间段设置失败: {e}")
             return False
 
-    def get_time_filters(self, monitor_id: int, forward_id: int) -> List[Dict]:
-        """获取特定频道对的时间段设置"""
-        try:
-            pair_id = f"{monitor_id}:{forward_id}"
-            self.cursor.execute('''
-                SELECT filter_id, start_time, end_time, days_of_week, mode, is_active
-                FROM time_filters
-                WHERE pair_id = ? AND is_active = 1
-                ORDER BY filter_id
-            ''', (pair_id,))
-
-            filters = []
-            for row in self.cursor.fetchall():
-                filters.append({
-                    'filter_id': row[0],
-                    'start_time': row[1],
-                    'end_time': row[2],
-                    'days_of_week': row[3],
-                    'mode': row[4],
-                    'is_active': bool(row[5])
-                })
-            return filters
-        except Exception as e:
-            logging.error(f"获取时间段设置失败: {e}")
-            return []
+    # 已经合并到上面的get_time_filters方法中
 
     def update_time_filter(self, filter_id: int, start_time: str = None, end_time: str = None,
                           days_of_week: str = None, mode: str = None, is_active: bool = None) -> bool:
