@@ -385,7 +385,12 @@ class MyMessageHandler:
                 return
 
             try:
-                channel_id = int("-100"+str(channel_id))
+                # 检查频道ID是否已经包含-100前缀
+                channel_id_str = str(channel_id)
+                if channel_id_str.startswith('-100'):
+                    channel_id = int(channel_id_str)
+                else:
+                    channel_id = int("-100" + channel_id_str)
             except ValueError as e:
                 logging.error(f"频道ID格式错误: {channel_id}, 错误: {e}")
                 return
@@ -549,10 +554,10 @@ class MyMessageHandler:
                         reply_to_message_id=forwarded_msg.message_id
                     ))
                     return
-                    
+
                 # 确定媒体类型
                 media_type = self.get_media_type(message)
-                
+
                 # 如果是贴图，使用特殊处理
                 if media_type == 'sticker':
                     asyncio.create_task(self.handle_sticker_send(
@@ -562,7 +567,7 @@ class MyMessageHandler:
                         reply_to_message_id=forwarded_msg.message_id
                     ))
                     return
-                    
+
                 # 异步处理媒体文件
                 asyncio.create_task(self.handle_media_send(
                     message=message,
@@ -630,7 +635,12 @@ class MyMessageHandler:
             # 向所有转发频道发送编辑通知
             for channel in forward_channels:
                 try:
-                    channel_id = int("-100" + str(channel.get('channel_id')))
+                    # 检查频道ID是否已经包含-100前缀
+                    channel_id_str = str(channel.get('channel_id'))
+                    if channel_id_str.startswith('-100'):
+                        channel_id = int(channel_id_str)
+                    else:
+                        channel_id = int("-100" + channel_id_str)
 
                     # 以回复形式发送编辑通知
                     # 注意：这里我们不尝试编辑原消息，而是发送新消息作为通知
@@ -679,7 +689,12 @@ class MyMessageHandler:
             # 向所有转发频道发送删除通知
             for channel in forward_channels:
                 try:
-                    channel_id = int("-100" + str(channel.get('channel_id')))
+                    # 检查频道ID是否已经包含-100前缀
+                    channel_id_str = str(channel.get('channel_id'))
+                    if channel_id_str.startswith('-100'):
+                        channel_id = int(channel_id_str)
+                    else:
+                        channel_id = int("-100" + channel_id_str)
 
                     # 发送删除通知
                     await self.bot.send_message(
