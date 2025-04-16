@@ -9,8 +9,8 @@ from config import Config
 from message_handler import MyMessageHandler
 from commands import BotCommands
 from telegram import (
-    Update, 
-    InlineKeyboardButton, 
+    Update,
+    InlineKeyboardButton,
     InlineKeyboardMarkup,
     CallbackQuery
 )
@@ -28,21 +28,21 @@ class ForwardBot:
     def __init__(self, config):
         self.config = config
         self.db = Database(config.DATABASE_NAME)
-        
+
         # Initialize Telegram bot
         self.application = Application.builder().token(config.TELEGRAM_TOKEN).build()
-        
+
         # Initialize Telethon client
         self.client = TelegramClient(
             config.SESSION_NAME,
             config.API_ID,
             config.API_HASH
         )
-        
+
         # Initialize components
         self.channel_manager = ChannelManager(self.db, config, self.client)
         self.message_handler = MyMessageHandler(self.db, self.client, self.application.bot)
-        
+
         # Setup handlers
         self.setup_handlers()
 
@@ -53,11 +53,11 @@ class ForwardBot:
         self.application.add_handler(CommandHandler("channels", self.channels_command))
         self.application.add_handler(CommandHandler("language", self.language_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
-        
+
         # 添加频道管理处理器
         for handler in self.channel_manager.get_handlers():
             self.application.add_handler(handler)
-        
+
         # 添加错误处理器
         self.application.add_error_handler(self.error_handler)
 
@@ -78,7 +78,7 @@ class ForwardBot:
                     )
         except Exception as e:
             logging.error(f"Error in error handler: {e}")
-        
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /start 命令"""
         if update.effective_user.id != self.config.OWNER_ID:
@@ -98,7 +98,7 @@ class ForwardBot:
 
         lang = self.db.get_user_language(update.effective_user.id)
         help_text = get_text(lang, 'help_message')
-        
+
         try:
             await update.message.reply_text(
                 help_text,
@@ -136,7 +136,7 @@ class ForwardBot:
             lang = self.db.get_user_language(update.effective_user.id)
             await update.message.reply_text(get_text(lang, 'unauthorized'))
             return
-            
+
         await self.channel_manager.show_language_settings(update, context)
 
     async def channels_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -163,28 +163,38 @@ class ForwardBot:
         try:
             # 初始化配置
             await self.initialize()
-            
+
             # 启动 Telethon 客户端
             await self.client.start(phone=self.config.PHONE_NUMBER)
-            
+
             # 启动清理任务
             await self.message_handler.start_cleanup_task()
-            
+
             # 注册消息处理器
             @self.client.on(events.NewMessage)
             async def handle_new_message(event):
                 await self.message_handler.handle_channel_message(event)
-            
+
+            # 注册消息编辑处理器
+            @self.client.on(events.MessageEdited)
+            async def handle_edited_message(event):
+                await self.message_handler.handle_edited_message(event)
+
+            # 注册消息删除处理器
+            @self.client.on(events.MessageDeleted)
+            async def handle_deleted_message(event):
+                await self.message_handler.handle_deleted_message(event)
+
             # 启动机器人
             await self.application.initialize()
             await self.application.start()
             await self.application.updater.start_polling()
-            
+
             print("Bot started successfully!")
-            
+
             # 保持运行
             await self.client.run_until_disconnected()
-            
+
         except Exception as e:
             logging.error(f"Error starting bot: {e}")
             raise
@@ -197,11 +207,11 @@ class ForwardBot:
         try:
             if self.message_handler.cleanup_task:
                 self.message_handler.cleanup_task.cancel()
-            
+
             # 清理所有剩余的临时文件
             for file_path in list(self.message_handler.temp_files.keys()):
                 await self.message_handler.cleanup_file(file_path)
-                
+
             await self.application.stop()
             await self.client.disconnect()
             self.db.cleanup()
@@ -224,11 +234,11 @@ async def main():
     try:
         # 初始化配置
         config = Config()
-        
+
         # 创建并启动机器人
         bot = ForwardBot(config)
         await bot.start()
-        
+
     except Exception as e:
         logging.error(f"Critical error: {e}")
         import traceback

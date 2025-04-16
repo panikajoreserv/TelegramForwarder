@@ -21,7 +21,7 @@ TRANSLATIONS = {
         'forward_success': "Successfully forwarded message to channel {channel_id}",
         'direct_forward_failed': "Direct forward failed, trying alternative method: {error}",
         'text_send_success': "Successfully sent text message to channel {channel_id}",
-        'forwarded_message_template': "Forwarded from {title}\n{username}\n\n{content}",
+        'forwarded_message_template_old': "Forwarded from {title}\n{username}\n\n{content}",
         'private_channel': "Private Channel",
         'download_progress': "Download progress: {percentage:.1f}%",
         'forward_message_error': "Error in handle_forward_message: {error}",
@@ -132,14 +132,17 @@ TRANSLATIONS = {
         'processing': "Processing your request...",
         'invalid_forward': "❌ Please forward a message from the target channel or use the channel selector.",
         'channel_not_found': "❌ Channel not found. Please try again.",
-        'forwarded_message_template': "Forwarded from: {title}\n{source_info}\n{separator}\n\n{content}",
-        'chat_type_private_channel': "[Private Channel]",
-        'chat_type_public_channel': "[Public Channel]",
-        'chat_type_private_channel_with_link': "[Private Channel with Link]",
-        'chat_type_group': "[Group]",
-        'chat_type_supergroup': "[Supergroup]",
-        'chat_type_gigagroup': "[Broadcast Group]",
-        'chat_type_channel': "[Channel]",
+        'forwarded_message_template': "📨 *Forwarded Message*\n━━━━━━━━━━━━━━━━━━━━━\n📢 *Source:* {title} {username}\n📋 *Type:* {chat_type}\n⏱ *Time:* {time}\n━━━━━━━━━━━━━━━━━━━━━\n\n{content}",
+        'chat_type_private_channel': "🔒 Private Channel",
+        'chat_type_public_channel': "🌐 Public Channel",
+        'chat_type_private_channel_with_link': "🔗 Private Channel with Link",
+        'chat_type_group': "👥 Group",
+        'chat_type_supergroup': "👥 Supergroup",
+        'chat_type_gigagroup': "📢 Broadcast Group",
+        'chat_type_channel': "📢 Channel",
+        'reply_to_message': "↩️ *Reply to:* {text}",
+        'edited_message': "✏️ *Edited message*",
+        'deleted_message': "🗑️ *Message was deleted*",
     },
     'zh': {
         'file_cleanup_success': "已清理文件：{file_path}",
@@ -159,8 +162,19 @@ TRANSLATIONS = {
         'forward_success': "成功转发消息到频道 {channel_id}",
         'direct_forward_failed': "直接转发失败，尝试替代方法：{error}",
         'text_send_success': "成功发送文本消息到频道 {channel_id}",
-        'forwarded_message_template': "转发自 {title}\n{username}\n\n{content}",
+        'forwarded_message_template_old': "转发自 {title}\n{username}\n\n{content}",
+        'forwarded_message_template': "📨 *转发消息*\n━━━━━━━━━━━━━━━━━━━━━\n📢 *来源:* {title} {username}\n📋 *类型:* {chat_type}\n⏱ *时间:* {time}\n━━━━━━━━━━━━━━━━━━━━━\n\n{content}",
         'private_channel': "私有频道",
+        'chat_type_private_channel': "🔒 私有频道",
+        'chat_type_public_channel': "🌐 公开频道",
+        'chat_type_private_channel_with_link': "🔗 带链接的私有频道",
+        'chat_type_group': "👥 群组",
+        'chat_type_supergroup': "👥 超级群组",
+        'chat_type_gigagroup': "📢 广播群组",
+        'chat_type_channel': "📢 频道",
+        'reply_to_message': "↩️ *回复:* {text}",
+        'edited_message': "✏️ *消息已编辑*",
+        'deleted_message': "🗑️ *消息已删除*",
         'download_progress': "下载进度：{percentage:.1f}%",
         'forward_message_error': "处理消息转发时出错：{error}",
         'welcome': "👋 欢迎使用频道转发机器人!\n\n使用 /channels 管理频道和转发配对",
@@ -283,7 +297,7 @@ TRANSLATIONS = {
 
 def get_text(lang: str, key: str, **kwargs) -> str:
     """获取指定语言的文本
-    
+
     Args:
         lang: 语言代码 ('en' 或 'zh')
         key: 文本键名
@@ -291,7 +305,7 @@ def get_text(lang: str, key: str, **kwargs) -> str:
     """
     if lang not in TRANSLATIONS:
         lang = 'en'  # 默认使用英语
-    
+
     text = TRANSLATIONS[lang].get(key, TRANSLATIONS['en'].get(key, key))
     try:
         if kwargs:
@@ -302,5 +316,5 @@ def get_text(lang: str, key: str, **kwargs) -> str:
     except Exception as e:
         logging.error(f"Error formatting text: {e}")
         return text
-    
+
     return text

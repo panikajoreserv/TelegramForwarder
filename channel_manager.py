@@ -3,8 +3,8 @@ from telegram import (
     KeyboardButton,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
-    Update, 
-    InlineKeyboardButton, 
+    Update,
+    InlineKeyboardButton,
     InlineKeyboardMarkup,
     CallbackQuery
 )
@@ -40,7 +40,7 @@ class ChannelManager:
         """显示语言设置"""
         user_id = update.effective_user.id
         current_lang = self.db.get_user_language(user_id)
-        
+
         keyboard = [
             [
                 InlineKeyboardButton("English", callback_data="lang_en"),
@@ -48,13 +48,13 @@ class ChannelManager:
             ],
             [InlineKeyboardButton(get_text(current_lang, 'back'), callback_data="channel_management")]
         ]
-        
+
         current_lang_display = "English" if current_lang == "en" else "中文"
         text = (
             f"{get_text(current_lang, 'select_language')}\n"
             f"{get_text(current_lang, 'current_language', lang=current_lang_display)}"
         )
-        
+
         if isinstance(update, Update) and update.callback_query:
             await update.callback_query.message.edit_text(
                 text,
@@ -70,10 +70,10 @@ class ChannelManager:
         """处理语言更改"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         new_lang = query.data.split('_')[1]
-        
+
         success = self.db.set_user_language(user_id, new_lang)
         if success:
             await query.message.edit_text(
@@ -114,12 +114,12 @@ class ChannelManager:
                     ],
                     WAITING_FOR_MANUAL_INPUT: [
                         MessageHandler(
-                            filters.TEXT & ~filters.COMMAND, 
+                            filters.TEXT & ~filters.COMMAND,
                             self.handle_manual_input
                         ),
                         MessageHandler(filters.Regex('^(cancel|Cancel|取消)$'), self.cancel_add_channel),
                     ]
-                    
+
                 },
                 fallbacks=[
                     CommandHandler('cancel', self.cancel_add_channel),
@@ -128,52 +128,52 @@ class ChannelManager:
                 name="add_channel",
                 persistent=False
             ),
-            
+
             # 删除频道相关
             CallbackQueryHandler(
-                self.show_remove_channel_options, 
+                self.show_remove_channel_options,
                 pattern='^remove_channel(_[0-9]+)?$'
             ),
             CallbackQueryHandler(
-                self.handle_remove_channel, 
+                self.handle_remove_channel,
                 pattern='^remove_channel_[0-9]+$'
             ),
             CallbackQueryHandler(
-                self.handle_remove_confirmation, 
+                self.handle_remove_confirmation,
                 pattern='^confirm_remove_channel_[0-9]+$'
             ),
 
             # 频道列表
             CallbackQueryHandler(
-                self.show_channel_list, 
+                self.show_channel_list,
                 pattern='^list_channels(_[0-9]+)?$'
             ),
 
             # 配对管理相关
             CallbackQueryHandler(
-                self.view_channel_pairs, 
+                self.view_channel_pairs,
                 pattern='^view_pairs(_[0-9]+)?$'
             ),
             CallbackQueryHandler(
-                self.handle_manage_specific_pair, 
+                self.handle_manage_specific_pair,
                 pattern='^manage_pair_[0-9]+(_[0-9]+)?$'
             ),
             CallbackQueryHandler(
-                self.handle_add_specific_pair, 
+                self.handle_add_specific_pair,
                 pattern='^add_pair_[0-9]+_[0-9]+(_add)?$'
             ),
             CallbackQueryHandler(
-                self.handle_remove_specific_pair, 
+                self.handle_remove_specific_pair,
                 pattern='^remove_pair_[0-9]+_[0-9]+$'
             ),
             CallbackQueryHandler(
-self.handle_confirm_remove_pair, 
+self.handle_confirm_remove_pair,
                 pattern='^confirm_remove_pair_[0-9]+_[0-9]+$'
             ),
 
             # 返回处理
             CallbackQueryHandler(self.handle_back, pattern='^back_to_'),
-            
+
             # 通用管理菜单
             CallbackQueryHandler(self.show_channel_management, pattern='^channel_management$'),
         ]
@@ -183,7 +183,7 @@ self.handle_confirm_remove_pair,
         """开始添加频道流程"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
 
@@ -200,19 +200,19 @@ self.handle_confirm_remove_pair,
             ],
             [InlineKeyboardButton(get_text(lang, 'cancel'), callback_data="cancel")]
         ]
-        
+
         await query.message.edit_text(
             get_text(lang, 'select_channel_type'),
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        
+
         return CHOOSING_CHANNEL_TYPE
 
     async def handle_channel_type_choice(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理频道类型选择"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
 
@@ -246,29 +246,29 @@ self.handle_confirm_remove_pair,
         """处理添加方法选择"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
-        
+
         try:
             if query.data == "method_forward":
                 reply_markup = CustomKeyboard.get_share_keyboard(lang)
-                
+
                 context.user_data['awaiting_share'] = True
                 context.user_data['channel_type'] = 'MONITOR' if 'monitor' in query.message.text.lower() else 'FORWARD'
-                
+
                 # 发送新消息并保存其ID
                 new_message = await query.message.reply_text(
                     get_text(lang, 'forward_instruction'),
                     reply_markup=reply_markup
                 )
                 context.user_data['keyboard_message_id'] = new_message.message_id
-                
+
                 # 删除原消息
                 await query.message.delete()
-                
+
                 return WAITING_FOR_FORWARD
-                
+
             elif query.data == "method_manual":
                 await query.message.edit_text(
                     get_text(lang, 'manual_input_instruction'),
@@ -277,7 +277,7 @@ self.handle_confirm_remove_pair,
                     ]])
                 )
                 return WAITING_FOR_MANUAL_INPUT
-                
+
         except Exception as e:
             logging.error(f"Error in handle_add_method: {e}")
             await query.message.reply_text(
@@ -322,7 +322,7 @@ self.handle_confirm_remove_pair,
             chat_id = None
             chat_title = None
             chat_username = None
-            
+
             # 处理用户分享
             if message.users_shared:
                 users = message.users_shared.users
@@ -351,7 +351,7 @@ self.handle_confirm_remove_pair,
                 chat_id = self.normalize_channel_id(chat.id)
                 chat_title = chat.title
                 chat_username = chat.username
-                
+
             # 处理转发的用户消息
             elif message.forward_from:
                 user = message.forward_from
@@ -377,7 +377,7 @@ self.handle_confirm_remove_pair,
 
             if success:
                 channel_type_display = get_text(
-                    lang, 
+                    lang,
                     'monitor_channel' if channel_type == 'MONITOR' else 'forward_channel'
                 )
                 await message.reply_text(
@@ -395,7 +395,7 @@ self.handle_confirm_remove_pair,
 
             context.user_data.clear()
             return ConversationHandler.END
-                
+
         except Exception as e:
             logging.error(f"Error in handle_forwarded_message: {e}")
             await message.reply_text(
@@ -411,7 +411,7 @@ self.handle_confirm_remove_pair,
             input_text = message.text.strip()
             user_id = update.effective_user.id
             lang = self.db.get_user_language(user_id)
-            
+
             try:
                 # 统一处理ID格式
                 channel_id = self.normalize_channel_id(input_text)
@@ -419,7 +419,7 @@ self.handle_confirm_remove_pair,
                 # 使用标准格式获取频道信息
                 full_id = int(f"-100{channel_id}")
                 chat = await self.client.get_entity(full_id)
-                
+
                 channel_type = context.user_data.get('channel_type')
                 success = self.db.add_channel(
                     channel_id=channel_id,  # 使用标准化的ID
@@ -445,7 +445,7 @@ self.handle_confirm_remove_pair,
             except ValueError:
                 await message.reply_text(get_text(lang, 'invalid_id_format'))
                 return WAITING_FOR_MANUAL_INPUT
-                
+
             except Exception as e:
                 logging.error(f"Error getting channel info: {e}")
                 await message.reply_text(get_text(lang, 'channel_info_error'))
@@ -467,15 +467,21 @@ self.handle_confirm_remove_pair,
         """处理删除频道请求"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
-        
+
         try:
+            # 添加详细日志
+            logging.info(f"处理删除频道请求: {query.data}")
+
             channel_id = int(query.data.split('_')[-1])
+            logging.info(f"获取频道信息: {channel_id}")
+
             channel_info = self.db.get_channel_info(channel_id)
-            
+
             if not channel_info:
+                logging.error(f"未找到频道: {channel_id}")
                 await query.message.reply_text(
                     get_text(lang, 'channel_not_found'),
                     reply_markup=InlineKeyboardMarkup([[
@@ -505,7 +511,9 @@ self.handle_confirm_remove_pair,
                 lang,
                 'monitor_channel' if channel_info['channel_type'] == 'MONITOR' else 'forward_channel'
             )
-            
+
+            logging.info(f"准备发送删除确认消息: {channel_info['channel_name']} (ID: {channel_id})")
+
             # 发送新消息而不是编辑原消息
             await query.message.reply_text(
                 get_text(lang, 'delete_confirm',
@@ -514,18 +522,24 @@ self.handle_confirm_remove_pair,
                         type=channel_type_display),
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-            
+
             # 删除原消息
             await query.message.delete()
-            
+
         except Exception as e:
             logging.error(f"Error in handle_remove_channel: {e}")
+            # 发送新消息而不是编辑原消息
             await query.message.reply_text(
                 get_text(lang, 'error_occurred'),
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                 ]])
             )
+            # 尝试删除原消息
+            try:
+                await query.message.delete()
+            except Exception as delete_error:
+                logging.error(f"删除原消息失败: {delete_error}")
 
 
 
@@ -534,7 +548,7 @@ self.handle_confirm_remove_pair,
         """取消添加频道"""
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
-        
+
         # 移除自定义键盘
         if context.user_data.get('awaiting_share'):
             if update.callback_query:
@@ -552,7 +566,7 @@ self.handle_confirm_remove_pair,
                 await update.callback_query.message.edit_text(get_text(lang, 'operation_cancelled'))
             else:
                 await update.message.reply_text(get_text(lang, 'operation_cancelled'))
-        
+
         # 清理状态
         context.user_data.clear()
         return ConversationHandler.END
@@ -561,11 +575,14 @@ self.handle_confirm_remove_pair,
         """显示可删除的频道列表"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
-        
+
         try:
+            # 添加详细日志
+            logging.info(f"显示删除频道选项: {query.data}")
+
             # 获取页码
             page = 1
             if query.data and '_' in query.data:
@@ -574,32 +591,40 @@ self.handle_confirm_remove_pair,
                     parts = query.data.split('_')
                     if len(parts) > 1 and parts[-1].isdigit():
                         page = int(parts[-1])
+                        logging.info(f"当前页码: {page}")
                 except ValueError:
                     page = 1
 
             per_page = 7
             monitor_result = self.db.get_channels_by_type('MONITOR', page, per_page)
             forward_result = self.db.get_channels_by_type('FORWARD', page, per_page)
-            
+
             monitor_channels = monitor_result['channels']
             forward_channels = forward_result['channels']
             total_pages = max(monitor_result['total_pages'], forward_result['total_pages'])
-            
+
             # 确保至少有1页
             total_pages = max(1, total_pages)
             # 确保页码在有效范围内
             page = max(1, min(page, total_pages))
+            logging.info(f"页面信息: 当前页={page}, 总页数={total_pages}")
+            logging.info(f"监控频道数量: {len(monitor_channels)}, 转发频道数量: {len(forward_channels)}")
+
             if not monitor_channels and not forward_channels:
-                await query.message.edit_text(
+                logging.info("没有可用的频道")
+                # 发送新消息而不是编辑原消息
+                await query.message.reply_text(
                     get_text(lang, 'no_channels'),
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                     ]])
                 )
+                # 删除原消息
+                await query.message.delete()
                 return
 
             keyboard = []
-            
+
             if monitor_channels:
                 keyboard.append([InlineKeyboardButton(
                     f"-- {get_text(lang, 'monitor_channel')} --",
@@ -647,23 +672,29 @@ self.handle_confirm_remove_pair,
                 f"{get_text(lang, 'page_info').format(current=page, total=total_pages)}"
             )
 
-            try:
-                await query.message.edit_text(
-                    text,
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            except BadRequest as e:
-                if "Message is not modified" not in str(e):
-                    raise
-                
+            logging.info("准备发送频道列表")
+            # 发送新消息而不是编辑原消息
+            await query.message.reply_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            # 删除原消息
+            await query.message.delete()
+
         except Exception as e:
             logging.error(f"Error in show_remove_channel_options: {e}")
-            await query.message.edit_text(
+            # 发送新消息而不是编辑原消息
+            await query.message.reply_text(
                 get_text(lang, 'error_occurred'),
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                 ]])
             )
+            # 尝试删除原消息
+            try:
+                await query.message.delete()
+            except Exception as delete_error:
+                logging.error(f"删除原消息失败: {delete_error}")
 
 
 
@@ -672,36 +703,71 @@ self.handle_confirm_remove_pair,
         """处理删除确认"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
 
         try:
-            channel_id = int(query.data.split('_')[-1])
-            success = self.db.remove_channel(channel_id)
+            # 添加详细日志
+            logging.info(f"处理删除确认回调: {query.data}")
 
-            if success:
-                await query.message.edit_text(
-                    get_text(lang, 'channel_deleted'),
+            # 解析频道ID
+            parts = query.data.split('_')
+            if len(parts) >= 3:
+                channel_id = int(parts[-1])
+                logging.info(f"准备删除频道ID: {channel_id}")
+
+                # 获取频道信息用于日志记录
+                channel_info = self.db.get_channel_info(channel_id)
+                if channel_info:
+                    logging.info(f"删除频道: {channel_info['channel_name']} (ID: {channel_id})")
+
+                # 执行删除操作
+                success = self.db.remove_channel(channel_id)
+                logging.info(f"删除操作结果: {success}")
+
+                if success:
+                    # 发送新消息而不是编辑原消息
+                    await query.message.reply_text(
+                        get_text(lang, 'channel_deleted'),
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
+                        ]])
+                    )
+                    # 删除原消息
+                    await query.message.delete()
+                else:
+                    # 发送新消息而不是编辑原消息
+                    await query.message.reply_text(
+                        get_text(lang, 'delete_failed'),
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton(get_text(lang, 'retry'), callback_data="remove_channel")
+                        ]])
+                    )
+                    # 删除原消息
+                    await query.message.delete()
+            else:
+                logging.error(f"无效的回调数据格式: {query.data}")
+                await query.message.reply_text(
+                    get_text(lang, 'error_occurred'),
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                     ]])
                 )
-            else:
-                await query.message.edit_text(
-                    get_text(lang, 'delete_failed'),
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton(get_text(lang, 'retry'), callback_data="remove_channel")
-                    ]])
-                )
         except Exception as e:
             logging.error(f"Error in handle_remove_confirmation: {e}")
-            await query.message.edit_text(
+            # 发送新消息而不是编辑原消息
+            await query.message.reply_text(
                 get_text(lang, 'delete_error'),
                 reply_markup=InlineKeyboardMarkup([[
-InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
+                    InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                 ]])
             )
+            # 尝试删除原消息
+            try:
+                await query.message.delete()
+            except Exception as delete_error:
+                logging.error(f"删除原消息失败: {delete_error}")
 
 
     async def show_channel_management(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -726,12 +792,12 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
             if isinstance(update, Update):
                 if update.callback_query:
                     await update.callback_query.message.edit_text(
-                        menu_text, 
+                        menu_text,
                         reply_markup=InlineKeyboardMarkup(keyboard)
                     )
                 elif update.message:
                     await update.message.reply_text(
-                        menu_text, 
+                        menu_text,
                         reply_markup=InlineKeyboardMarkup(keyboard)
                     )
         except Exception as e:
@@ -760,12 +826,12 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
         """处理返回操作"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
-        
+
         destination = query.data.split('_')[2]
-        
+
         if destination == "main":
             # 返回主菜单
             await self.show_channel_management(update, context)
@@ -784,10 +850,10 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
         """显示频道配对列表"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
-        
+
         # 获取页码
         page = 1
         if query.data and '_' in query.data:
@@ -798,7 +864,7 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
 
         per_page = 7
         monitor_result = self.db.get_channels_by_type('MONITOR', page, per_page)
-        
+
         if not monitor_result['channels']:
             await query.message.edit_text(
                 get_text(lang, 'no_monitor_channels'),
@@ -810,11 +876,11 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
 
         text = get_text(lang, 'pair_management_title') + "\n\n"
         keyboard = []
-        
+
         for channel in monitor_result['channels']:
             forward_pairs = self.db.get_forward_channels(channel['channel_id'], 1, 3)
             text += f"\n🔍 {channel['channel_name']}\n"
-            
+
             if forward_pairs['channels']:
                 text += get_text(lang, 'current_pairs') + "\n"
                 for fwd in forward_pairs['channels']:
@@ -823,7 +889,7 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                     text += get_text(lang, 'more_pairs', count=forward_pairs['total']) + "\n"
             else:
                 text += get_text(lang, 'no_pairs') + "\n"
-            
+
             keyboard.append([InlineKeyboardButton(
                 get_text(lang, 'manage_pairs_button').format(name=channel['channel_name']),
                 callback_data=f"manage_pair_{channel['channel_id']}_1"
@@ -864,10 +930,10 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
             """显示频道列表"""
             query = update.callback_query
             await query.answer()
-            
+
             user_id = update.effective_user.id
             lang = self.db.get_user_language(user_id)
-            
+
             # 获取页码
             page = 1
             if query.data and '_' in query.data:
@@ -877,11 +943,11 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                     page = 1
 
             per_page = 7  # 每页显示7个频道
-            
+
             # 获取分页数据
             monitor_result = self.db.get_channels_by_type('MONITOR', page, per_page)
             forward_result = self.db.get_channels_by_type('FORWARD', page, per_page)
-            
+
             monitor_channels = monitor_result['channels']
             forward_channels = forward_result['channels']
             total_pages = max(monitor_result['total_pages'], forward_result['total_pages'])
@@ -914,7 +980,7 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
             # 构建分页按钮
             keyboard = []
             navigation = []
-            
+
             if page > 1:
                 navigation.append(InlineKeyboardButton(
                     get_text(lang, 'previous_page'),
@@ -925,15 +991,15 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                     get_text(lang, 'next_page'),
                     callback_data=f"list_channels_{page+1}"
                 ))
-                
+
             if navigation:
                 keyboard.append(navigation)
-                
+
             keyboard.append([InlineKeyboardButton(
                 get_text(lang, 'back'),
                 callback_data="channel_management"
             )])
-            
+
             # 添加当前页码信息
             text += f"\n{get_text(lang, 'page_info').format(current=page, total=total_pages)}"
 
@@ -954,16 +1020,16 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
         """处理特定频道的配对管理"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
-        
+
         try:
             parts = query.data.split('_')
             monitor_id = int(parts[2])
             logging.info(f"get monitor_id -- {monitor_id}")
             page = int(parts[3]) if len(parts) > 3 else 1
-            
+
             monitor_info = self.db.get_channel_info(monitor_id)
             if not monitor_info:
                 await query.message.edit_text(
@@ -973,10 +1039,10 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                     ]])
                 )
                 return
-            
+
             text = get_text(lang, 'manage_pair_title', channel=monitor_info['channel_name']) + "\n\n"
             keyboard = []
-            
+
             # 获取当前配对
             current_pairs = self.db.get_forward_channels(monitor_id, page)
             if current_pairs['channels']:
@@ -1034,7 +1100,7 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
             except BadRequest as e:
                 if not str(e).startswith("Message is not modified"):
                     raise
-                
+
         except Exception as e:
             logging.error(f"Error in handle_manage_specific_pair: {e}")
             await query.message.edit_text(
@@ -1049,10 +1115,10 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
         """处理添加特定配对"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
-        
+
         try:
             parts = query.data.split('_')
             if len(parts) >= 4:
@@ -1060,11 +1126,11 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                 forward_id = int(parts[3])
             else:
                 raise ValueError("Invalid callback data format")
-            
+
             # 获取频道信息用于显示
             monitor_info = self.db.get_channel_info(monitor_id)
             forward_info = self.db.get_channel_info(forward_id)
-            
+
             if not monitor_info or not forward_info:
                 await query.message.edit_text(
                     get_text(lang, 'channel_not_found'),
@@ -1073,9 +1139,9 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                     ]])
                 )
                 return
-            
+
             success = self.db.add_channel_pair(monitor_id, forward_id)
-            
+
             if success:
                 await query.message.edit_text(
                     get_text(lang, 'pair_added_success').format(
@@ -1112,19 +1178,19 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
         """处理移除配对"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
-        
+
         try:
             parts = query.data.split('_')
             monitor_id = int(parts[2])
             forward_id = int(parts[3])
-            
+
             # 获取频道信息用于显示
             monitor_info = self.db.get_channel_info(monitor_id)
             forward_info = self.db.get_channel_info(forward_id)
-            
+
             if not monitor_info or not forward_info:
                 await query.message.edit_text(
                     get_text(lang, 'channel_not_found'),
@@ -1133,21 +1199,21 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                     ]])
                 )
                 return
-            
+
             # 显示确认消息
             keyboard = [
                 [
                     InlineKeyboardButton(
-                        get_text(lang, 'confirm_remove'), 
+                        get_text(lang, 'confirm_remove'),
                         callback_data=f"confirm_remove_pair_{monitor_id}_{forward_id}"
                     ),
                     InlineKeyboardButton(
-                        get_text(lang, 'cancel'), 
+                        get_text(lang, 'cancel'),
                         callback_data=f"manage_pair_{monitor_id}_1"
                     )
                 ]
             ]
-            
+
             await query.message.edit_text(
                 get_text(lang, 'confirm_remove_pair').format(
                     monitor=monitor_info['channel_name'],
@@ -1155,7 +1221,7 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                 ),
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-            
+
         except Exception as e:
             logging.error(f"Error in handle_remove_specific_pair: {e}")
             await query.message.edit_text(
@@ -1169,17 +1235,17 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
         """处理确认移除配对"""
         query = update.callback_query
         await query.answer()
-        
+
         user_id = update.effective_user.id
         lang = self.db.get_user_language(user_id)
-        
+
         try:
             parts = query.data.split('_')
             monitor_id = int(parts[3])
             forward_id = int(parts[4])
-            
+
             success = self.db.remove_channel_pair(monitor_id, forward_id)
-            
+
             if success:
                 await query.message.edit_text(
                     get_text(lang, 'pair_removed_success'),
@@ -1200,7 +1266,7 @@ InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")
                         )
                     ]])
                 )
-            
+
         except Exception as e:
             logging.error(f"Error in handle_confirm_remove_pair: {e}")
             await query.message.edit_text(
