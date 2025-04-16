@@ -650,11 +650,11 @@ class MyMessageHandler:
                     except Exception as e:
                         logging.warning(f"获取原始消息的转发记录失败: {e}")
 
-                    # 发送编辑通知
+                    # 发送编辑通知，不使用Markdown格式以避免解析错误
                     send_kwargs = {
                         'chat_id': channel_id,
                         'text': edit_text,
-                        'parse_mode': 'Markdown',
+                        'parse_mode': None,  # 不使用任何格式化
                         'disable_web_page_preview': True
                     }
 
@@ -702,10 +702,15 @@ class MyMessageHandler:
             # 向所有转发频道发送删除通知
             for channel in forward_channels:
                 try:
-                    # 手动添加 -100 前缀
-                    original_channel_id = channel.get('channel_id')
-                    channel_id = int("-100" + str(original_channel_id))
-                    logging.info(f"处理频道ID(删除消息): 原始值={original_channel_id}, 处理后={channel_id}")
+                    # 尝试直接使用数字ID
+                    channel_id = channel.get('channel_id')
+                    # 如果是字符串，转换为整数
+                    if isinstance(channel_id, str):
+                        try:
+                            channel_id = int(channel_id)
+                        except ValueError:
+                            pass
+                    logging.info(f"使用频道ID(删除消息): {channel_id}")
 
                     # 尝试找到原始消息的转发消息，以便以回复形式发送删除通知
                     forwarded_msg = None
