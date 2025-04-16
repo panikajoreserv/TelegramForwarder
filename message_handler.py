@@ -384,8 +384,10 @@ class MyMessageHandler:
                 logging.error(get_text('en', 'invalid_channel_id'))
                 return
 
-            # 直接使用频道ID，不做任何处理
-            logging.info(f"使用原始频道ID: {channel_id}")
+            # 手动添加 -100 前缀
+            original_channel_id = channel_id
+            channel_id = int("-100" + str(channel_id))
+            logging.info(f"处理频道ID: 原始值={original_channel_id}, 处理后={channel_id}")
 
             # 检查是否是回复消息
             reply_to_message_id = None
@@ -632,9 +634,10 @@ class MyMessageHandler:
             # 向所有转发频道发送编辑通知
             for channel in forward_channels:
                 try:
-                    # 直接使用频道ID，不做任何处理
-                    channel_id = channel.get('channel_id')
-                    logging.info(f"使用原始频道ID(编辑消息): {channel_id}")
+                    # 手动添加 -100 前缀
+                    original_channel_id = channel.get('channel_id')
+                    channel_id = int("-100" + str(original_channel_id))
+                    logging.info(f"处理频道ID(编辑消息): 原始值={original_channel_id}, 处理后={channel_id}")
 
                     # 尝试找到原始消息的转发消息，以便以回复形式发送编辑通知
                     forwarded_msg = None
@@ -699,9 +702,10 @@ class MyMessageHandler:
             # 向所有转发频道发送删除通知
             for channel in forward_channels:
                 try:
-                    # 直接使用频道ID，不做任何处理
-                    channel_id = channel.get('channel_id')
-                    logging.info(f"使用原始频道ID(删除消息): {channel_id}")
+                    # 手动添加 -100 前缀
+                    original_channel_id = channel.get('channel_id')
+                    channel_id = int("-100" + str(original_channel_id))
+                    logging.info(f"处理频道ID(删除消息): 原始值={original_channel_id}, 处理后={channel_id}")
 
                     # 尝试找到原始消息的转发消息，以便以回复形式发送删除通知
                     forwarded_msg = None
