@@ -12,6 +12,21 @@ class Database:
 
     def setup_database(self):
         """初始化数据库表"""
+        # 首先检查数据库是否已存在且有数据
+        import os
+        import time
+        import shutil
+
+        existing_db = os.path.exists(self.db_name) and os.path.getsize(self.db_name) > 0
+
+        # 如果数据库已存在，创建备份
+        if existing_db:
+            backup_name = f"{self.db_name}.backup_{int(time.time())}"
+            shutil.copy2(self.db_name, backup_name)
+            logging.info(f"已创建数据库备份: {backup_name}")
+
+        # 使用 CREATE TABLE IF NOT EXISTS 添加新表
+        # 这样不会影响现有表和数据
         self.cursor.executescript('''
             CREATE TABLE IF NOT EXISTS channels (
                 channel_id INTEGER PRIMARY KEY,
@@ -61,6 +76,16 @@ class Database:
                 mode TEXT CHECK(mode IN ('ALLOW', 'BLOCK')) DEFAULT 'ALLOW',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- 新增消息转发关系跟踪表
+            CREATE TABLE IF NOT EXISTS forwarded_messages (
+                original_chat_id INTEGER,
+                original_message_id INTEGER,
+                forwarded_chat_id INTEGER,
+                forwarded_message_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (original_chat_id, original_message_id, forwarded_chat_id)
             );
 
             CREATE INDEX IF NOT EXISTS idx_channels_type
@@ -544,6 +569,154 @@ class Database:
             logging.error(f"Error in remove_channel_pair: {e}")
             return False
 
+    # 过滤规则相关方法
+    def add_filter_rule(self, pair_id: str, rule_type: str, filter_mode: str, pattern: str) -> bool:
+        """添加过滤规则
+
+        Args:
+            pair_id: 频道配对ID，格式为 "monitor_id:forward_id"
+            rule_type: 规则类型，'WHITELIST' 或 'BLACKLIST'
+            filter_mode: 过滤模式，'KEYWORD' 或 'REGEX'
+            pattern: 过滤模式
+        """
+        try:
+            self.cursor.execute(
+                "INSERT INTO filter_rules (pair_id, rule_type, filter_mode, pattern) VALUES (?, ?, ?, ?)",
+                (pair_id, rule_type, filter_mode, pattern)
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Error adding filter rule: {e}")
+            return False
+
+    def get_filter_rules(self, pair_id: str) -> List[Dict]:
+        """获取指定频道配对的过滤规则"""
+        try:
+            self.cursor.execute(
+                "SELECT * FROM filter_rules WHERE pair_id = ? AND is_active = 1",
+                (pair_id,)
+            )
+            rules = self.cursor.fetchall()
+            result = []
+            for rule in rules:
+                result.append({
+                    'rule_id': rule[0],
+                    'pair_id': rule[1],
+                    'rule_type': rule[2],
+                    'filter_mode': rule[3],
+                    'pattern': rule[4],
+                    'is_active': rule[5],
+                    'created_at': rule[6],
+                    'updated_at': rule[7]
+                })
+            return result
+        except Exception as e:
+            logging.error(f"Error getting filter rules: {e}")
+            return []
+
+    def remove_filter_rule(self, rule_id: int) -> bool:
+        """删除过滤规则"""
+        try:
+            self.cursor.execute(
+                "UPDATE filter_rules SET is_active = 0 WHERE rule_id = ?",
+                (rule_id,)
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Error removing filter rule: {e}")
+            return False
+
+    # 时间设置相关方法
+    def add_time_filter(self, pair_id: str, start_time: str, end_time: str, days_of_week: str, mode: str = 'ALLOW') -> bool:
+        """添加时间过滤器
+
+        Args:
+            pair_id: 频道配对ID，格式为 "monitor_id:forward_id"
+            start_time: 开始时间，格式为 "HH:MM"
+            end_time: 结束时间，格式为 "HH:MM"
+            days_of_week: 星期，格式为 "1,2,3,4,5,6,7"
+            mode: 模式，'ALLOW' 或 'BLOCK'
+        """
+        try:
+            self.cursor.execute(
+                "INSERT INTO time_filters (pair_id, start_time, end_time, days_of_week, mode) VALUES (?, ?, ?, ?, ?)",
+                (pair_id, start_time, end_time, days_of_week, mode)
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Error adding time filter: {e}")
+            return False
+
+    def get_time_filters(self, pair_id: str) -> List[Dict]:
+        """获取指定频道配对的时间过滤器"""
+        try:
+            self.cursor.execute(
+                "SELECT * FROM time_filters WHERE pair_id = ? AND is_active = 1",
+                (pair_id,)
+            )
+            filters = self.cursor.fetchall()
+            result = []
+            for filter in filters:
+                result.append({
+                    'filter_id': filter[0],
+                    'pair_id': filter[1],
+                    'start_time': filter[2],
+                    'end_time': filter[3],
+                    'days_of_week': filter[4],
+                    'is_active': filter[5],
+                    'mode': filter[6],
+                    'created_at': filter[7],
+                    'updated_at': filter[8]
+                })
+            return result
+        except Exception as e:
+            logging.error(f"Error getting time filters: {e}")
+            return []
+
+    def remove_time_filter(self, filter_id: int) -> bool:
+        """删除时间过滤器"""
+        try:
+            self.cursor.execute(
+                "UPDATE time_filters SET is_active = 0 WHERE filter_id = ?",
+                (filter_id,)
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Error removing time filter: {e}")
+            return False
+
+    def get_all_channel_pairs(self) -> List[Dict]:
+        """获取所有活跃的频道配对"""
+        try:
+            self.cursor.execute(
+                """
+                SELECT cp.monitor_channel_id, cp.forward_channel_id,
+                       m.channel_name as monitor_name, f.channel_name as forward_name
+                FROM channel_pairs cp
+                JOIN channels m ON cp.monitor_channel_id = m.channel_id
+                JOIN channels f ON cp.forward_channel_id = f.channel_id
+                WHERE cp.is_active = 1
+                """
+            )
+            pairs = self.cursor.fetchall()
+            result = []
+            for pair in pairs:
+                result.append({
+                    'monitor_id': pair[0],
+                    'forward_id': pair[1],
+                    'monitor_name': pair[2],
+                    'forward_name': pair[3],
+                    'pair_id': f"{pair[0]}:{pair[1]}"
+                })
+            return result
+        except Exception as e:
+            logging.error(f"Error getting all channel pairs: {e}")
+            return []
+
     def get_channel_info(self, channel_id: int) -> Optional[Dict[str, Any]]:
         """获取频道信息"""
         try:
@@ -831,3 +1004,43 @@ class Database:
         except sqlite3.Error as e:
             logging.error(f"Database optimization failed: {e}")
             return False
+
+    def save_forwarded_message(self, original_chat_id: int, original_message_id: int,
+                              forwarded_chat_id: int, forwarded_message_id: int) -> bool:
+        """保存消息转发关系"""
+        try:
+            query = """
+            INSERT OR REPLACE INTO forwarded_messages
+            (original_chat_id, original_message_id, forwarded_chat_id, forwarded_message_id)
+            VALUES (?, ?, ?, ?)
+            """
+            self.cursor.execute(query, (original_chat_id, original_message_id,
+                                      forwarded_chat_id, forwarded_message_id))
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            logging.error(f"保存消息转发关系失败: {e}")
+            return False
+
+    def get_forwarded_message(self, original_chat_id: int, original_message_id: int,
+                             forwarded_chat_id: int) -> Optional[Dict[str, Any]]:
+        """获取转发消息关系"""
+        try:
+            query = """
+            SELECT * FROM forwarded_messages
+            WHERE original_chat_id = ? AND original_message_id = ? AND forwarded_chat_id = ?
+            """
+            self.cursor.execute(query, (original_chat_id, original_message_id, forwarded_chat_id))
+            result = self.cursor.fetchone()
+            if result:
+                return {
+                    'original_chat_id': result[0],
+                    'original_message_id': result[1],
+                    'forwarded_chat_id': result[2],
+                    'forwarded_message_id': result[3],
+                    'created_at': result[4]
+                }
+            return None
+        except sqlite3.Error as e:
+            logging.error(f"获取转发消息关系失败: {e}")
+            return None

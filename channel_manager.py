@@ -171,6 +171,14 @@ self.handle_confirm_remove_pair,
                 pattern='^confirm_remove_pair_[0-9]+_[0-9]+$'
             ),
 
+            # 过滤规则管理
+            CallbackQueryHandler(self.show_filter_rules_menu, pattern='^filter_rules$'),
+            CallbackQueryHandler(self.show_time_settings_menu, pattern='^time_settings$'),
+            CallbackQueryHandler(self.show_pair_selection_for_filter, pattern='^add_filter_rule$'),
+            CallbackQueryHandler(self.show_pair_selection_for_time, pattern='^add_time_filter$'),
+            CallbackQueryHandler(self.show_filter_rules_list, pattern='^list_filter_rules$'),
+            CallbackQueryHandler(self.show_time_filters_list, pattern='^list_time_filters$'),
+
             # 返回处理
             CallbackQueryHandler(self.handle_back, pattern='^back_to_'),
 
@@ -783,6 +791,10 @@ self.handle_confirm_remove_pair,
             [
                 InlineKeyboardButton(get_text(lang, 'channel_list'), callback_data="list_channels"),
                 InlineKeyboardButton(get_text(lang, 'pair_management'), callback_data="view_pairs")
+            ],
+            [
+                InlineKeyboardButton(get_text(lang, 'filter_rules'), callback_data="filter_rules"),
+                InlineKeyboardButton(get_text(lang, 'time_settings'), callback_data="time_settings")
             ]
         ]
 
@@ -1275,3 +1287,199 @@ self.handle_confirm_remove_pair,
                     InlineKeyboardButton(get_text(lang, 'back'), callback_data="view_pairs")
                 ]])
             )
+
+    async def show_filter_rules_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """显示过滤规则管理菜单"""
+        query = update.callback_query
+        await query.answer()
+
+        user_id = update.effective_user.id
+        lang = self.db.get_user_language(user_id)
+
+        keyboard = [
+            [InlineKeyboardButton(get_text(lang, 'add_filter_rule'), callback_data="add_filter_rule")],
+            [InlineKeyboardButton(get_text(lang, 'list_filter_rules'), callback_data="list_filter_rules")],
+            [InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")]
+        ]
+
+        await query.message.edit_text(
+            get_text(lang, 'filter_rules_menu'),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    async def show_time_settings_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """显示时间设置管理菜单"""
+        query = update.callback_query
+        await query.answer()
+
+        user_id = update.effective_user.id
+        lang = self.db.get_user_language(user_id)
+
+        keyboard = [
+            [InlineKeyboardButton(get_text(lang, 'add_time_filter'), callback_data="add_time_filter")],
+            [InlineKeyboardButton(get_text(lang, 'list_time_filters'), callback_data="list_time_filters")],
+            [InlineKeyboardButton(get_text(lang, 'back'), callback_data="channel_management")]
+        ]
+
+        await query.message.edit_text(
+            get_text(lang, 'time_settings_menu'),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    async def show_pair_selection_for_filter(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """显示频道配对选择界面，用于过滤规则"""
+        query = update.callback_query
+        await query.answer()
+
+        user_id = update.effective_user.id
+        lang = self.db.get_user_language(user_id)
+
+        # 获取所有频道配对
+        pairs = self.db.get_all_channel_pairs()
+
+        if not pairs:
+            await query.message.edit_text(
+                get_text(lang, 'no_pairs'),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(get_text(lang, 'back'), callback_data="filter_rules")
+                ]])
+            )
+            return
+
+        keyboard = []
+        for pair in pairs:
+            keyboard.append([InlineKeyboardButton(
+                f"{pair['monitor_name']} → {pair['forward_name']}",
+                callback_data=f"filter_pair_{pair['pair_id']}"
+            )])
+
+        keyboard.append([InlineKeyboardButton(get_text(lang, 'back'), callback_data="filter_rules")])
+
+        await query.message.edit_text(
+            get_text(lang, 'select_pair_for_filter'),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    async def show_pair_selection_for_time(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """显示频道配对选择界面，用于时间设置"""
+        query = update.callback_query
+        await query.answer()
+
+        user_id = update.effective_user.id
+        lang = self.db.get_user_language(user_id)
+
+        # 获取所有频道配对
+        pairs = self.db.get_all_channel_pairs()
+
+        if not pairs:
+            await query.message.edit_text(
+                get_text(lang, 'no_pairs'),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(get_text(lang, 'back'), callback_data="time_settings")
+                ]])
+            )
+            return
+
+        keyboard = []
+        for pair in pairs:
+            keyboard.append([InlineKeyboardButton(
+                f"{pair['monitor_name']} → {pair['forward_name']}",
+                callback_data=f"time_pair_{pair['pair_id']}"
+            )])
+
+        keyboard.append([InlineKeyboardButton(get_text(lang, 'back'), callback_data="time_settings")])
+
+        await query.message.edit_text(
+            get_text(lang, 'select_pair_for_time'),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    async def show_filter_rules_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """显示过滤规则列表"""
+        query = update.callback_query
+        await query.answer()
+
+        user_id = update.effective_user.id
+        lang = self.db.get_user_language(user_id)
+
+        # 获取所有频道配对
+        pairs = self.db.get_all_channel_pairs()
+
+        if not pairs:
+            await query.message.edit_text(
+                get_text(lang, 'no_pairs'),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(get_text(lang, 'back'), callback_data="filter_rules")
+                ]])
+            )
+            return
+
+        text = get_text(lang, 'filter_rules_menu') + "\n\n"
+
+        # 获取每个配对的过滤规则
+        for pair in pairs:
+            pair_id = pair['pair_id']
+            rules = self.db.get_filter_rules(pair_id)
+
+            text += f"\n**{pair['monitor_name']} → {pair['forward_name']}**\n"
+
+            if not rules:
+                text += get_text(lang, 'no_filter_rules') + "\n"
+            else:
+                for rule in rules:
+                    rule_type = get_text(lang, rule['rule_type'].lower())
+                    filter_mode = get_text(lang, rule['filter_mode'].lower())
+                    text += f"- {rule_type} ({filter_mode}): {rule['pattern']}\n"
+
+        keyboard = [[InlineKeyboardButton(get_text(lang, 'back'), callback_data="filter_rules")]]
+
+        await query.message.edit_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+
+    async def show_time_filters_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """显示时间过滤器列表"""
+        query = update.callback_query
+        await query.answer()
+
+        user_id = update.effective_user.id
+        lang = self.db.get_user_language(user_id)
+
+        # 获取所有频道配对
+        pairs = self.db.get_all_channel_pairs()
+
+        if not pairs:
+            await query.message.edit_text(
+                get_text(lang, 'no_pairs'),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(get_text(lang, 'back'), callback_data="time_settings")
+                ]])
+            )
+            return
+
+        text = get_text(lang, 'time_settings_menu') + "\n\n"
+
+        # 获取每个配对的时间过滤器
+        for pair in pairs:
+            pair_id = pair['pair_id']
+            filters = self.db.get_time_filters(pair_id)
+
+            text += f"\n**{pair['monitor_name']} → {pair['forward_name']}**\n"
+
+            if not filters:
+                text += get_text(lang, 'no_time_filters') + "\n"
+            else:
+                for filter in filters:
+                    mode = get_text(lang, filter['mode'].lower())
+                    days = filter['days_of_week']
+                    text += f"- {mode}: {filter['start_time']}-{filter['end_time']} ({days})\n"
+
+        keyboard = [[InlineKeyboardButton(get_text(lang, 'back'), callback_data="time_settings")]]
+
+        await query.message.edit_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
