@@ -385,12 +385,10 @@ class MyMessageHandler:
                 return
 
             try:
-                # 检查频道ID是否已经包含-100前缀
-                channel_id_str = str(channel_id)
-                if channel_id_str.startswith('-100'):
-                    channel_id = int(channel_id_str)
-                else:
-                    channel_id = int("-100" + channel_id_str)
+                # 恢复原来的处理方式，但添加更多日志
+                original_channel_id = channel_id
+                channel_id = int("-100"+str(channel_id))
+                logging.info(f"处理频道ID: 原始值={original_channel_id}, 处理后={channel_id}")
             except ValueError as e:
                 logging.error(f"频道ID格式错误: {channel_id}, 错误: {e}")
                 return
@@ -621,7 +619,13 @@ class MyMessageHandler:
                 return
 
             # 获取消息内容
-            content = message.text or message.caption or ""
+            content = ""
+            if hasattr(message, 'text') and message.text:
+                content = message.text
+            elif hasattr(message, 'caption') and message.caption:
+                content = message.caption
+
+            logging.info(f"编辑消息内容: {content}")
             if not content:
                 return
 
@@ -635,21 +639,35 @@ class MyMessageHandler:
             # 向所有转发频道发送编辑通知
             for channel in forward_channels:
                 try:
-                    # 检查频道ID是否已经包含-100前缀
-                    channel_id_str = str(channel.get('channel_id'))
-                    if channel_id_str.startswith('-100'):
-                        channel_id = int(channel_id_str)
-                    else:
-                        channel_id = int("-100" + channel_id_str)
+                    # 恢复原来的处理方式，但添加更多日志
+                    original_channel_id = channel.get('channel_id')
+                    channel_id = int("-100" + str(original_channel_id))
+                    logging.info(f"处理频道ID(编辑消息): 原始值={original_channel_id}, 处理后={channel_id}")
 
-                    # 以回复形式发送编辑通知
-                    # 注意：这里我们不尝试编辑原消息，而是发送新消息作为通知
-                    await self.bot.send_message(
-                        chat_id=channel_id,
-                        text=edit_text,
-                        parse_mode='Markdown',
-                        disable_web_page_preview=True
-                    )
+                    # 尝试找到原始消息的转发消息，以便以回复形式发送编辑通知
+                    forwarded_msg = None
+                    try:
+                        # 在数据库中查找这条消息是否已经转发过
+                        if hasattr(message, 'id'):
+                            forwarded_msg = self.db.get_forwarded_message(chat.id, message.id, channel_id)
+                            if forwarded_msg:
+                                logging.info(f"找到原始消息的转发记录，将使用原生回复: {forwarded_msg['forwarded_message_id']}")
+                    except Exception as e:
+                        logging.warning(f"获取原始消息的转发记录失败: {e}")
+
+                    # 发送编辑通知
+                    send_kwargs = {
+                        'chat_id': channel_id,
+                        'text': edit_text,
+                        'parse_mode': 'Markdown',
+                        'disable_web_page_preview': True
+                    }
+
+                    # 如果找到了原消息的转发记录，使用回复形式
+                    if forwarded_msg:
+                        send_kwargs['reply_to_message_id'] = forwarded_msg['forwarded_message_id']
+
+                    await self.bot.send_message(**send_kwargs)
 
                 except Exception as e:
                     logging.error(f"发送编辑通知到频道 {channel.get('channel_id')} 失败: {str(e)}")
@@ -689,19 +707,36 @@ class MyMessageHandler:
             # 向所有转发频道发送删除通知
             for channel in forward_channels:
                 try:
-                    # 检查频道ID是否已经包含-100前缀
-                    channel_id_str = str(channel.get('channel_id'))
-                    if channel_id_str.startswith('-100'):
-                        channel_id = int(channel_id_str)
-                    else:
-                        channel_id = int("-100" + channel_id_str)
+                    # 恢复原来的处理方式，但添加更多日志
+                    original_channel_id = channel.get('channel_id')
+                    channel_id = int("-100" + str(original_channel_id))
+                    logging.info(f"处理频道ID(删除消息): 原始值={original_channel_id}, 处理后={channel_id}")
+
+                    # 尝试找到原始消息的转发消息，以便以回复形式发送删除通知
+                    forwarded_msg = None
+                    try:
+                        # 在数据库中查找这条消息是否已经转发过
+                        if hasattr(event, 'deleted_ids') and event.deleted_ids:
+                            for msg_id in event.deleted_ids:
+                                forwarded_msg = self.db.get_forwarded_message(chat_id, msg_id, channel_id)
+                                if forwarded_msg:
+                                    logging.info(f"找到原始消息的转发记录，将使用原生回复: {forwarded_msg['forwarded_message_id']}")
+                                    break
+                    except Exception as e:
+                        logging.warning(f"获取原始消息的转发记录失败: {e}")
 
                     # 发送删除通知
-                    await self.bot.send_message(
-                        chat_id=channel_id,
-                        text=delete_notice,
-                        parse_mode='Markdown'
-                    )
+                    send_kwargs = {
+                        'chat_id': channel_id,
+                        'text': delete_notice,
+                        'parse_mode': 'Markdown'
+                    }
+
+                    # 如果找到了原消息的转发记录，使用回复形式
+                    if forwarded_msg:
+                        send_kwargs['reply_to_message_id'] = forwarded_msg['forwarded_message_id']
+
+                    await self.bot.send_message(**send_kwargs)
 
                 except Exception as e:
                     logging.error(f"发送删除通知到频道 {channel.get('channel_id')} 失败: {str(e)}")
