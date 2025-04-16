@@ -6,6 +6,7 @@ from datetime import datetime
 
 class Database:
     def __init__(self, db_name: str):
+        self.database_name = db_name
         self.conn = sqlite3.connect(db_name)
         self.cursor = self.conn.cursor()
         self.setup_database()
@@ -17,12 +18,12 @@ class Database:
         import time
         import shutil
 
-        existing_db = os.path.exists(self.db_name) and os.path.getsize(self.db_name) > 0
+        existing_db = os.path.exists(self.database_name) and os.path.getsize(self.database_name) > 0
 
         # 如果数据库已存在，创建备份
         if existing_db:
-            backup_name = f"{self.db_name}.backup_{int(time.time())}"
-            shutil.copy2(self.db_name, backup_name)
+            backup_name = f"{self.database_name}.backup_{int(time.time())}"
+            shutil.copy2(self.database_name, backup_name)
             logging.info(f"已创建数据库备份: {backup_name}")
 
         # 使用 CREATE TABLE IF NOT EXISTS 添加新表
