@@ -503,17 +503,53 @@ class MyMessageHandler:
                         'disable_web_page_preview': True
                     }
 
+                    # 检查是否有回复消息ID，并安全地添加
                     if reply_to_message_id:
-                        send_kwargs['reply_to_message_id'] = reply_to_message_id
+                        try:
+                            # 先检查回复的消息是否存在
+                            await self.bot.get_chat(channel_id)  # 确保频道存在
+                            try:
+                                # 尝试获取回复消息
+                                await self.bot.get_messages(channel_id, reply_to_message_id)
+                                # 如果成功获取，添加回复ID
+                                send_kwargs['reply_to_message_id'] = reply_to_message_id
+                                logging.info(f"回复消息存在，使用原生回复: {reply_to_message_id}")
+                            except Exception as reply_error:
+                                # 如果回复消息不存在，不添加回复ID，只在日志中记录
+                                logging.warning(f"回复消息不存在，使用普通消息: {reply_error}")
+                                # 确保回复文本已添加到消息中
+                                if reply_info and reply_text not in forwarded_text:
+                                    send_kwargs['text'] = reply_text + forwarded_text
+                        except Exception as chat_error:
+                            logging.warning(f"检查频道或消息时出错: {chat_error}")
 
-                    forwarded_msg = await self.bot.send_message(**send_kwargs)
-
-                    # 保存转发关系
-                    self.db.save_forwarded_message(from_chat.id, message.id, channel_id, forwarded_msg.message_id)
+                    # 尝试发送消息
+                    try:
+                        forwarded_msg = await self.bot.send_message(**send_kwargs)
+                        # 保存转发关系
+                        self.db.save_forwarded_message(from_chat.id, message.id, channel_id, forwarded_msg.message_id)
+                    except telegram_error.BadRequest as br_error:
+                        # 处理特定的错误
+                        if "Message to be replied not found" in str(br_error):
+                            # 回复的消息不存在，移除回复ID后重试
+                            logging.warning("回复的消息不存在，移除回复ID后重试")
+                            if 'reply_to_message_id' in send_kwargs:
+                                del send_kwargs['reply_to_message_id']
+                            forwarded_msg = await self.bot.send_message(**send_kwargs)
+                            self.db.save_forwarded_message(from_chat.id, message.id, channel_id, forwarded_msg.message_id)
+                        elif "can't parse entities" in str(br_error).lower():
+                            # 实体解析错误，尝试使用纯文本
+                            logging.warning(f"实体解析错误，尝试使用纯文本: {br_error}")
+                            send_kwargs['parse_mode'] = None
+                            forwarded_msg = await self.bot.send_message(**send_kwargs)
+                            self.db.save_forwarded_message(from_chat.id, message.id, channel_id, forwarded_msg.message_id)
+                        else:
+                            # 其他BadRequest错误，重新抛出
+                            raise
 
                 except Exception as e:
-                    # 如果Markdown解析失败，尝试使用纯文本
-                    logging.warning(f"使用Markdown发送消息失败: {e}")
+                    # 如果发送失败，尝试使用纯文本
+                    logging.warning(f"发送消息失败，尝试使用纯文本: {e}")
                     send_kwargs = {
                         'chat_id': channel_id,
                         'text': forwarded_text,
@@ -521,9 +557,7 @@ class MyMessageHandler:
                         'disable_web_page_preview': True
                     }
 
-                    if reply_to_message_id:
-                        send_kwargs['reply_to_message_id'] = reply_to_message_id
-
+                    # 不添加回复ID，避免可能的错误
                     forwarded_msg = await self.bot.send_message(**send_kwargs)
 
                     # 保存转发关系
@@ -1318,10 +1352,23 @@ class MyMessageHandler:
                     logging.error(f"清理贴图文件失败: {str(e3)}")
 
     async def handle_custom_emoji(self, message, channel_id):
-        """处理自定义表情"""
+        """处理自定义表情和特殊格式消息"""
         try:
             # 检查消息中的自定义表情实体
             has_custom_emoji = False
+            has_special_format = False
+            content = ""
+
+            # 获取消息内容
+            if hasattr(message, 'text') and message.text:
+                content = message.text
+            elif hasattr(message, 'caption') and message.caption:
+                content = message.caption
+
+            # 检查内容是否包含特殊格式
+            if content and ('$' in content or '@' in content or '#' in content or
+                           '\ud83c' in content or '\ud83d' in content or '\ud83e' in content):
+                has_special_format = True
 
             # 检查 entities 属性
             if hasattr(message, 'entities') and message.entities:
@@ -1332,6 +1379,9 @@ class MyMessageHandler:
                     elif hasattr(entity, '__class__') and 'MessageEntityCustomEmoji' in str(entity.__class__):
                         has_custom_emoji = True
                         break
+                    # 检查是否有代码块、表格等复杂格式
+                    elif hasattr(entity, 'type') and entity.type in ['code', 'pre', 'text_link', 'mention']:
+                        has_special_format = True
 
             # 检查 caption_entities 属性
             if not has_custom_emoji and hasattr(message, 'caption_entities') and message.caption_entities:
@@ -1342,6 +1392,15 @@ class MyMessageHandler:
                     elif hasattr(entity, '__class__') and 'MessageEntityCustomEmoji' in str(entity.__class__):
                         has_custom_emoji = True
                         break
+                    # 检查是否有代码块、表格等复杂格式
+                    elif hasattr(entity, 'type') and entity.type in ['code', 'pre', 'text_link', 'mention']:
+                        has_special_format = True
+
+            # 检查是否有加密货币交易信号的特征
+            if content and ('SIGNAL' in content.upper() or 'LONG' in content.upper() or 'SHORT' in content.upper() or
+                           'ENTRY' in content.upper() or 'STOPLOSS' in content.upper() or
+                           'BUY' in content.upper() or 'SELL' in content.upper()):
+                has_special_format = True
 
             if has_custom_emoji:
                 logging.info("检测到自定义表情，添加提示消息并禁用Markdown解析")
@@ -1350,6 +1409,10 @@ class MyMessageHandler:
                     text="ℹ️ 原消息包含自定义表情，可能无法完全显示。"
                 )
                 return True
+            elif has_special_format:
+                logging.info("检测到特殊格式消息，禁用Markdown解析")
+                return True
+
             return False
         except Exception as e:
             logging.error(f"处理自定义表情时出错: {str(e)}")
@@ -1372,17 +1435,62 @@ class MyMessageHandler:
             # 获取原消息文本
             original_text = forwarded_msg.text or forwarded_msg.caption or ""
 
-            # 使用编辑消息方式添加媒体
-            await self.edit_message_with_media(
-                channel_id=channel_id,
-                message_id=forwarded_msg.message_id,
-                text=original_text,
-                media_path=file_path,
-                media_type=media_type,
-                media_info=media_info
-            )
+            # 检查原消息是否包含可能导致解析错误的内容
+            has_potential_parsing_issues = False
+            if original_text and ('$' in original_text or '@' in original_text or '#' in original_text or
+                                 '\ud83c' in original_text or '\ud83d' in original_text or '\ud83e' in original_text):
+                has_potential_parsing_issues = True
+                logging.info("检测到可能导致解析问题的内容，将使用更安全的处理方式")
 
-            logging.info(f"成功将媒体添加到消息: {forwarded_msg.message_id}")
+            if has_potential_parsing_issues:
+                # 对于可能有解析问题的消息，直接使用回复方式发送媒体
+                try:
+                    await self.handle_media_send(
+                        message=message,
+                        channel_id=channel_id,
+                        media_type=media_type,
+                        reply_to_message_id=forwarded_msg.message_id,
+                        from_chat=from_chat
+                    )
+                    logging.info("使用回复方式成功发送媒体")
+                    return
+                except Exception as reply_error:
+                    logging.error(f"回复方式发送媒体失败: {str(reply_error)}")
+                    # 继续尝试编辑方式
+
+            # 使用编辑消息方式添加媒体
+            try:
+                await self.edit_message_with_media(
+                    channel_id=channel_id,
+                    message_id=forwarded_msg.message_id,
+                    text=original_text,
+                    media_path=file_path,
+                    media_type=media_type,
+                    media_info=media_info
+                )
+                logging.info(f"成功将媒体添加到消息: {forwarded_msg.message_id}")
+            except telegram_error.BadRequest as br_error:
+                # 处理特定的错误
+                if "can't parse entities" in str(br_error).lower():
+                    logging.warning(f"编辑消息时出现实体解析错误，尝试使用纯文本: {br_error}")
+                    # 尝试使用纯文本编辑
+                    try:
+                        await self.edit_message_with_media(
+                            channel_id=channel_id,
+                            message_id=forwarded_msg.message_id,
+                            text=original_text,
+                            media_path=file_path,
+                            media_type=media_type,
+                            media_info=media_info,
+                            force_plain_text=True
+                        )
+                        logging.info("使用纯文本模式成功编辑消息添加媒体")
+                    except Exception as plain_error:
+                        logging.error(f"纯文本编辑也失败，尝试回复方式: {str(plain_error)}")
+                        raise  # 继续抛出异常，让下面的代码处理
+                else:
+                    # 其他BadRequest错误，继续抛出
+                    raise
 
         except Exception as e:
             logging.error(f"处理媒体编辑时出错: {str(e)}")
@@ -1398,11 +1506,22 @@ class MyMessageHandler:
                         reply_to_message_id=forwarded_msg.message_id,
                         from_chat=from_chat
                     )
+                    logging.info("使用回复方式成功发送媒体（作为备用方法）")
             except Exception as e2:
                 logging.error(f"备用方法发送媒体失败: {str(e2)}")
 
-    async def edit_message_with_media(self, channel_id, message_id, text, media_path, media_type, media_info):
-        """编辑消息以包含媒体文件"""
+    async def edit_message_with_media(self, channel_id, message_id, text, media_path, media_type, media_info, force_plain_text=False):
+        """编辑消息以包含媒体文件
+
+        Args:
+            channel_id: 频道ID
+            message_id: 消息ID
+            text: 消息文本
+            media_path: 媒体文件路径
+            media_type: 媒体类型
+            media_info: 媒体信息字典
+            force_plain_text: 是否强制使用纯文本模式（不使用Markdown）
+        """
         try:
             logging.info(f"开始编辑消息添加媒体: 消息 ID={message_id}, 媒体类型={media_type}")
 
@@ -1411,12 +1530,17 @@ class MyMessageHandler:
                 file_data = media_file.read()
 
                 try:
-                    # 检查消息是否包含自定义表情
+                    # 检查消息是否包含自定义表情或强制纯文本
                     has_custom_emoji = False
                     if text and ('\ud83c' in text or '\ud83d' in text or '\ud83e' in text):
                         # 简单检测是否可能包含表情
                         has_custom_emoji = True
                         logging.info("检测到可能包含表情的消息，禁用Markdown解析")
+
+                    # 确定是否使用Markdown
+                    use_markdown = not (has_custom_emoji or force_plain_text)
+                    if force_plain_text:
+                        logging.info("强制使用纯文本模式")
 
                     # 准备媒体对象
                     if media_type == 'photo':
@@ -1424,14 +1548,14 @@ class MyMessageHandler:
                         media = InputMediaPhoto(
                             media=file_data,
                             caption=text,
-                            parse_mode=None if has_custom_emoji else 'Markdown'
+                            parse_mode='Markdown' if use_markdown else None
                         )
                     elif media_type == 'video':
                         from telegram import InputMediaVideo
                         media_kwargs = {
                             'media': file_data,
                             'caption': text,
-                            'parse_mode': None if has_custom_emoji else 'Markdown',
+                            'parse_mode': 'Markdown' if use_markdown else None,
                             'supports_streaming': True
                         }
 
@@ -1449,7 +1573,7 @@ class MyMessageHandler:
                         doc_kwargs = {
                             'media': file_data,
                             'caption': text,
-                            'parse_mode': None if has_custom_emoji else 'Markdown'
+                            'parse_mode': 'Markdown' if use_markdown else None
                         }
 
                         if 'filename' in media_info:
@@ -1462,7 +1586,7 @@ class MyMessageHandler:
                         media = InputMediaDocument(
                             media=file_data,
                             caption=text,
-                            parse_mode=None if has_custom_emoji else 'Markdown'
+                            parse_mode='Markdown' if use_markdown else None
                         )
 
                     # 编辑消息媒体
@@ -1478,8 +1602,7 @@ class MyMessageHandler:
                 except Exception as edit_error:
                     logging.error(f"编辑消息媒体失败，尝试删除重发: {str(edit_error)}")
 
-                    # 如果编辑失败，回退到删除重发的方式
-                    # 先删除原消息
+                    # 删除原消息并重新发送
                     await self.bot.delete_message(
                         chat_id=channel_id,
                         message_id=message_id
@@ -1489,7 +1612,7 @@ class MyMessageHandler:
                     send_kwargs = {
                         'chat_id': channel_id,
                         'caption': text,
-                        'parse_mode': None if has_custom_emoji else 'Markdown',
+                        'parse_mode': 'Markdown' if use_markdown else None,
                         'read_timeout': 1800,
                         'write_timeout': 1800
                     }
