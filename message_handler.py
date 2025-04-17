@@ -505,23 +505,13 @@ class MyMessageHandler:
 
                     # 检查是否有回复消息ID，并安全地添加
                     if reply_to_message_id:
-                        try:
-                            # 先检查回复的消息是否存在
-                            await self.bot.get_chat(channel_id)  # 确保频道存在
-                            try:
-                                # 尝试获取回复消息
-                                await self.bot.get_messages(channel_id, reply_to_message_id)
-                                # 如果成功获取，添加回复ID
-                                send_kwargs['reply_to_message_id'] = reply_to_message_id
-                                logging.info(f"回复消息存在，使用原生回复: {reply_to_message_id}")
-                            except Exception as reply_error:
-                                # 如果回复消息不存在，不添加回复ID，只在日志中记录
-                                logging.warning(f"回复消息不存在，使用普通消息: {reply_error}")
-                                # 确保回复文本已添加到消息中
-                                if reply_info and reply_text not in forwarded_text:
-                                    send_kwargs['text'] = reply_text + forwarded_text
-                        except Exception as chat_error:
-                            logging.warning(f"检查频道或消息时出错: {chat_error}")
+                        # 直接添加回复ID，如果消息不存在，后面会捕获并处理错误
+                        send_kwargs['reply_to_message_id'] = reply_to_message_id
+                        logging.info(f"尝试使用原生回复: {reply_to_message_id}")
+
+                        # 确保回复文本已添加到消息中，以防回复失败
+                        if reply_info and reply_text not in forwarded_text:
+                            send_kwargs['text'] = reply_text + forwarded_text
 
                     # 尝试发送消息
                     try:
@@ -1038,20 +1028,30 @@ class MyMessageHandler:
                                 safe_media_list = []
                                 for media in remaining_media:
                                     try:
-                                        # 创建新的临时文件
-                                        with open(media['path'], 'rb') as src_file:
-                                            content = src_file.read()
-                                            tmp = NamedTemporaryFile(delete=False, prefix='tg_copy_', suffix=f'.{media["type"]}')
-                                            tmp.write(content)
-                                            tmp.close()
+                                        # 检查文件是否存在
+                                        if os.path.exists(media['path']):
+                                            # 创建新的临时文件
+                                            with open(media['path'], 'rb') as src_file:
+                                                content = src_file.read()
+                                                tmp = NamedTemporaryFile(delete=False, prefix='tg_copy_', suffix=f'.{media["type"]}')
+                                                tmp.write(content)
+                                                tmp.close()
 
-                                            # 更新媒体路径
-                                            new_media = media.copy()
-                                            new_media['path'] = tmp.name
-                                            # 记录临时文件
-                                            self.temp_files[tmp.name] = datetime.now()
-                                            safe_media_list.append(new_media)
-                                            logging.info(f"创建媒体文件副本: {tmp.name}")
+                                                # 更新媒体路径
+                                                new_media = media.copy()
+                                                new_media['path'] = tmp.name
+                                                # 记录临时文件
+                                                self.temp_files[tmp.name] = datetime.now()
+                                                safe_media_list.append(new_media)
+                                                logging.info(f"创建媒体文件副本: {tmp.name}")
+                                        else:
+                                            logging.warning(f"媒体文件不存在，无法创建副本: {media['path']}")
+                                            # 尝试使用缓存文件
+                                            if 'cache_path' in media and os.path.exists(media['cache_path']):
+                                                new_media = media.copy()
+                                                new_media['path'] = media['cache_path']
+                                                safe_media_list.append(new_media)
+                                                logging.info(f"使用缓存文件作为副本: {media['cache_path']}")
                                     except Exception as e:
                                         logging.error(f"创建媒体文件副本失败: {str(e)}")
 
@@ -1062,11 +1062,12 @@ class MyMessageHandler:
                                         # 使用编辑模式而不是回复模式
                                         # 创建一个新的文本消息用于编辑
                                         try:
-                                            # 发送一个空消息用于编辑
+                                            # 发送一个空消息用于编辑，使用回复形式
                                             temp_msg = await self.bot.send_message(
                                                 chat_id=channel_id,
                                                 text="正在加载媒体...",
-                                                disable_web_page_preview=True
+                                                disable_web_page_preview=True,
+                                                reply_to_message_id=forwarded_msg.message_id  # 使用回复形式
                                             )
 
                                             # 编辑第一个媒体
@@ -1084,7 +1085,8 @@ class MyMessageHandler:
                                                 # 如果有多个媒体，发送剩余的
                                                 if len(safe_media_list) > 1:
                                                     remaining_media = safe_media_list[1:]
-                                                    await self.send_media_group(channel_id, remaining_media, None)  # 不使用回复
+                                                    # 使用回复形式发送剩余媒体
+                                                    await self.send_media_group(channel_id, remaining_media, forwarded_msg.message_id)
 
                                             logging.info(f"成功发送剩余{len(safe_media_list)}个媒体作为媒体组")
                                         except Exception as edit_error:
@@ -1130,7 +1132,7 @@ class MyMessageHandler:
                                                         if 'filename' in media['media_info']:
                                                             send_kwargs['filename'] = media['media_info']['filename']
                                                         await self.bot.send_document(**send_kwargs)
-                                                logging.info(f"成功发送单个媒体作为回复")
+                                                logging.info("成功发送单个媒体作为回复")
                                             except Exception as e2:
                                                 logging.error(f"发送单个媒体失败: {str(e2)}")
                     except Exception as e:
