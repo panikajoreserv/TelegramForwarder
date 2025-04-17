@@ -392,11 +392,20 @@ class MyMessageHandler:
             # 检查是否是回复消息
             reply_to_message_id = None
             original_reply_message = None
+            reply_info = None
 
             if hasattr(message, 'reply_to_msg_id') and message.reply_to_msg_id:
                 try:
                     # 获取原始回复消息
                     original_reply_message = await self.client.get_messages(from_chat.id, ids=message.reply_to_msg_id)
+                    if original_reply_message:
+                        # 保存回复消息信息以便后续使用
+                        reply_content = original_reply_message.text or original_reply_message.caption or ""
+                        reply_info = {
+                            'id': original_reply_message.id,
+                            'content': reply_content,
+                            'short_content': reply_content[:50] + "..." if len(reply_content) > 50 else reply_content
+                        }
 
                     # 在数据库中查找这条消息是否已经转发过
                     forwarded_reply = self.db.get_forwarded_message(from_chat.id, message.reply_to_msg_id, channel_id)
@@ -475,25 +484,26 @@ class MyMessageHandler:
 
                 # 检查是否是回复消息
                 reply_text = ""
-                if hasattr(message, 'reply_to_msg_id') and message.reply_to_msg_id and not reply_to_message_id:
-                    try:
-                        # 尝试获取原始回复消息
-                        reply_msg = await self.client.get_messages(from_chat.id, ids=message.reply_to_msg_id)
-                        if reply_msg and (reply_msg.text or reply_msg.caption):
-                            reply_content = reply_msg.text or reply_msg.caption
-                            # 截取回复消息的前50个字符
-                            short_reply = reply_content[:50] + "..." if len(reply_content) > 50 else reply_content
-                            reply_text = get_text(lang, 'reply_to_message', text=short_reply) + "\n"
-                    except Exception as e:
-                        logging.warning(f"获取回复消息失败: {e}")
+                # 如果有回复消息但无法使用原生回复，则在消息中添加回复信息
+                if reply_info and not reply_to_message_id:
+                    reply_text = get_text(lang, 'reply_to_message', text=reply_info['short_content']) + "\n"
+                    logging.info(f"添加回复信息到消息中: {reply_info['short_content']}")
+
+                # 确保频道标题和类型正确显示
+                channel_title = getattr(from_chat, 'title', None)
+                if not channel_title:
+                    channel_title = getattr(from_chat, 'first_name', 'Unknown Channel')
 
                 # 使用新的消息模板
                 forwarded_text = get_text(lang, 'forwarded_message_template',
-                                         title=getattr(from_chat, 'title', 'Unknown Channel'),
+                                         title=channel_title,
                                          username=username,
                                          chat_type=chat_type,
                                          time=current_time,
                                          content=reply_text + content)
+
+                # 记录转发信息以便调试
+                logging.info(f"转发消息信息: 标题={channel_title}, 类型={chat_type}, 用户名={username}")
 
                 # 检查是否有自定义表情
                 await self.handle_custom_emoji(message, channel_id)
@@ -538,19 +548,23 @@ class MyMessageHandler:
 
             # 异步处理媒体消息
             if getattr(message, 'media', None) and forwarded_msg:
+                logging.info(f"检测到媒体消息，开始异步处理")
 
                 # 检查是否是媒体组
                 if hasattr(message, 'grouped_id') and message.grouped_id:
                     # 异步处理媒体组
+                    logging.info(f"检测到媒体组，开始异步处理媒体组")
                     asyncio.create_task(self.handle_media_group(
                         message=message,
                         channel_id=channel_id,
-                        reply_to_message_id=forwarded_msg.message_id
+                        forwarded_msg=forwarded_msg,  # 传递已转发的消息对象
+                        from_chat=from_chat
                     ))
                     return
 
                 # 确定媒体类型
                 media_type = self.get_media_type(message)
+                logging.info(f"媒体类型: {media_type}")
 
                 # 如果是贴图，使用特殊处理
                 if media_type == 'sticker':
@@ -562,12 +576,12 @@ class MyMessageHandler:
                     ))
                     return
 
-                # 异步处理媒体文件
-                asyncio.create_task(self.handle_media_send(
+                # 异步处理媒体文件，使用编辑模式
+                asyncio.create_task(self.handle_media_edit(
                     message=message,
                     channel_id=channel_id,
                     media_type=media_type,
-                    reply_to_message_id=forwarded_msg.message_id,
+                    forwarded_msg=forwarded_msg,  # 传递已转发的消息对象
                     from_chat=from_chat
                 ))
         except Exception as e:
@@ -628,9 +642,6 @@ class MyMessageHandler:
             # 获取用户语言
             lang = self.db.get_user_language(chat.id) or 'en'
 
-            # 直接使用编辑后的内容，不添加编辑通知
-            edit_text = content
-
             # 向所有转发频道发送编辑通知
             for channel in forward_channels:
                 try:
@@ -639,30 +650,42 @@ class MyMessageHandler:
                     channel_id = int("-100" + str(original_channel_id))
                     logging.info(f"处理频道ID(编辑消息): 原始值={original_channel_id}, 处理后={channel_id}")
 
-                    # 尝试找到原始消息的转发消息，以便以回复形式发送编辑通知
+                    # 尝试找到原始消息的转发消息
                     forwarded_msg = None
                     try:
                         # 在数据库中查找这条消息是否已经转发过
                         if hasattr(message, 'id'):
                             forwarded_msg = self.db.get_forwarded_message(chat.id, message.id, channel_id)
                             if forwarded_msg:
-                                logging.info(f"找到原始消息的转发记录，将使用原生回复: {forwarded_msg['forwarded_message_id']}")
+                                logging.info(f"找到原始消息的转发记录: {forwarded_msg['forwarded_message_id']}")
                     except Exception as e:
                         logging.warning(f"获取原始消息的转发记录失败: {e}")
 
-                    # 发送编辑通知，不使用Markdown格式以避免解析错误
+                    # 准备编辑通知消息
+                    edit_notice = get_text(lang, 'edited_message')
+                    edit_text = f"{edit_notice}\n\n{content}"
+
+                    # 发送编辑通知，使用Markdown格式
                     send_kwargs = {
                         'chat_id': channel_id,
                         'text': edit_text,
-                        'parse_mode': None,  # 不使用任何格式化
+                        'parse_mode': 'Markdown',  # 使用Markdown格式化
                         'disable_web_page_preview': True
                     }
 
                     # 如果找到了原消息的转发记录，使用回复形式
                     if forwarded_msg:
                         send_kwargs['reply_to_message_id'] = forwarded_msg['forwarded_message_id']
+                        logging.info("使用回复形式发送编辑通知")
 
-                    await self.bot.send_message(**send_kwargs)
+                    try:
+                        await self.bot.send_message(**send_kwargs)
+                        logging.info(f"成功发送编辑通知到频道 {channel_id}")
+                    except Exception as e:
+                        # 如果Markdown解析失败，尝试使用纯文本
+                        logging.warning(f"使用Markdown发送编辑通知失败: {e}")
+                        send_kwargs['parse_mode'] = None
+                        await self.bot.send_message(**send_kwargs)
 
                 except Exception as e:
                     logging.error(f"发送编辑通知到频道 {channel.get('channel_id')} 失败: {str(e)}")
@@ -698,21 +721,17 @@ class MyMessageHandler:
 
             # 构建删除通知消息
             delete_notice = get_text(lang, 'deleted_message')
+            logging.info(f"准备发送删除通知: {delete_notice}")
 
             # 向所有转发频道发送删除通知
             for channel in forward_channels:
                 try:
-                    # 尝试直接使用数字ID
-                    channel_id = channel.get('channel_id')
-                    # 如果是字符串，转换为整数
-                    if isinstance(channel_id, str):
-                        try:
-                            channel_id = int(channel_id)
-                        except ValueError:
-                            pass
-                    logging.info(f"使用频道ID(删除消息): {channel_id}")
+                    # 手动添加 -100 前缀
+                    original_channel_id = channel.get('channel_id')
+                    channel_id = int("-100" + str(original_channel_id))
+                    logging.info(f"处理频道ID(删除消息): 原始值={original_channel_id}, 处理后={channel_id}")
 
-                    # 尝试找到原始消息的转发消息，以便以回复形式发送删除通知
+                    # 尝试找到原始消息的转发消息
                     forwarded_msg = None
                     try:
                         # 在数据库中查找这条消息是否已经转发过
@@ -720,7 +739,7 @@ class MyMessageHandler:
                             for msg_id in event.deleted_ids:
                                 forwarded_msg = self.db.get_forwarded_message(chat_id, msg_id, channel_id)
                                 if forwarded_msg:
-                                    logging.info(f"找到原始消息的转发记录，将使用原生回复: {forwarded_msg['forwarded_message_id']}")
+                                    logging.info(f"找到原始消息的转发记录: {forwarded_msg['forwarded_message_id']}")
                                     break
                     except Exception as e:
                         logging.warning(f"获取原始消息的转发记录失败: {e}")
@@ -735,8 +754,16 @@ class MyMessageHandler:
                     # 如果找到了原消息的转发记录，使用回复形式
                     if forwarded_msg:
                         send_kwargs['reply_to_message_id'] = forwarded_msg['forwarded_message_id']
+                        logging.info("使用回复形式发送删除通知")
 
-                    await self.bot.send_message(**send_kwargs)
+                    try:
+                        await self.bot.send_message(**send_kwargs)
+                        logging.info(f"成功发送删除通知到频道 {channel_id}")
+                    except Exception as e:
+                        # 如果Markdown解析失败，尝试使用纯文本
+                        logging.warning(f"使用Markdown发送删除通知失败: {e}")
+                        send_kwargs['parse_mode'] = None
+                        await self.bot.send_message(**send_kwargs)
 
                 except Exception as e:
                     logging.error(f"发送删除通知到频道 {channel.get('channel_id')} 失败: {str(e)}")
@@ -791,7 +818,7 @@ class MyMessageHandler:
             logging.info("媒体文件下载完成")
 
             if not os.path.exists(file_path):
-                raise Exception(get_text('en', 'downloaded_file_not_found', file_path=file_path))
+                raise FileNotFoundError(get_text('en', 'downloaded_file_not_found', file_path=file_path))
 
             # 记录临时文件
             self.temp_files[file_path] = datetime.now()
@@ -833,7 +860,7 @@ class MyMessageHandler:
             # 将结果存入缓存
             self.media_cache[media_id] = media_info
 
-            # 设置缓存过期时间（例妈10分钟后自动清理）
+            # 设置缓存过期时间（例如10分钟后自动清理）
             asyncio.create_task(self.clear_media_cache(media_id, 600))
 
             return media_info
@@ -842,9 +869,9 @@ class MyMessageHandler:
             logging.error(f"下载媒体文件时出错: {str(e)}")
             if file_path and file_path in self.temp_files:
                 await self.cleanup_file(file_path)
-            return None
+            return {}
 
-    async def handle_media_group(self, message, channel_id, reply_to_message_id=None):
+    async def handle_media_group(self, message, channel_id, forwarded_msg=None, from_chat=None):
         """处理媒体组（多张图片或视频）"""
         try:
             # 获取媒体组ID
@@ -852,7 +879,13 @@ class MyMessageHandler:
             if not group_id:
                 # 如果不是媒体组，使用普通媒体处理
                 media_type = self.get_media_type(message)
-                await self.handle_media_send(message, channel_id, media_type, reply_to_message_id=reply_to_message_id)
+                if forwarded_msg:
+                    # 使用编辑模式
+                    await self.handle_media_edit(message, channel_id, media_type, forwarded_msg, from_chat)
+                else:
+                    # 使用回复模式
+                    reply_to_message_id = forwarded_msg.message_id if forwarded_msg else None
+                    await self.handle_media_send(message, channel_id, media_type, reply_to_message_id=reply_to_message_id)
                 return
 
             # 检查是否已经处理过这个媒体组
@@ -862,6 +895,7 @@ class MyMessageHandler:
 
             # 标记为已处理
             self.processed_media_groups.add(group_id)
+            logging.info(f"开始处理媒体组: {group_id}")
 
             # 获取同一组的所有媒体消息
             media_messages = await self.client.get_messages(
@@ -873,6 +907,7 @@ class MyMessageHandler:
 
             # 过滤出同一组的媒体
             group_media = [msg for msg in media_messages if hasattr(msg, 'grouped_id') and msg.grouped_id == group_id]
+            logging.info(f"找到媒体组消息: {len(group_media)} 个")
 
             # 准备媒体列表
             media_list = []
@@ -889,7 +924,33 @@ class MyMessageHandler:
 
             # 发送媒体组
             if media_list:
-                await self.send_media_group(channel_id, media_list, reply_to_message_id)
+                if forwarded_msg:
+                    # 如果有转发消息，先删除原消息，然后发送媒体组
+                    try:
+                        # 获取原消息文本
+                        original_text = forwarded_msg.text or forwarded_msg.caption or ""
+
+                        # 将原消息文本添加到第一个媒体的标题中
+                        if original_text and media_list and len(media_list) > 0:
+                            media_list[0]['caption'] = original_text
+
+                        # 删除原消息
+                        await self.bot.delete_message(
+                            chat_id=channel_id,
+                            message_id=forwarded_msg.message_id
+                        )
+                        logging.info(f"删除原消息以发送媒体组: {forwarded_msg.message_id}")
+
+                        # 发送媒体组
+                        await self.send_media_group(channel_id, media_list)
+                    except Exception as e:
+                        logging.error(f"删除原消息失败，尝试作为回复发送媒体组: {str(e)}")
+                        # 如果删除失败，尝试作为回复发送
+                        await self.send_media_group(channel_id, media_list, forwarded_msg.message_id)
+                else:
+                    # 如果没有转发消息，直接发送媒体组
+                    reply_to_message_id = forwarded_msg.message_id if forwarded_msg else None
+                    await self.send_media_group(channel_id, media_list, reply_to_message_id)
 
         except Exception as e:
             logging.error(f"处理媒体组时出错: {str(e)}")
@@ -1004,7 +1065,7 @@ class MyMessageHandler:
     async def handle_sticker_send(self, message, channel_id, from_chat, reply_to_message_id=None):
         """处理贴图发送"""
         try:
-            logging.info(f"开始处理贴图发送")
+            logging.info("开始处理贴图发送")
 
             # 下载贴图文件
             sticker_path = await self.client.download_media(message.media)
@@ -1037,7 +1098,7 @@ class MyMessageHandler:
                 os.remove(sticker_path)
                 logging.info(f"贴图文件已清理: {sticker_path}")
 
-            logging.info(f"贴图发送成功")
+            logging.info("贴图发送成功")
 
         except Exception as e:
             logging.error(f"发送贴图时出错: {str(e)}")
@@ -1087,7 +1148,7 @@ class MyMessageHandler:
                         break
 
             if has_custom_emoji:
-                logging.info(f"检测到自定义表情，添加提示消息")
+                logging.info("检测到自定义表情，添加提示消息")
                 await self.bot.send_message(
                     chat_id=channel_id,
                     text="ℹ️ 原消息包含自定义表情，可能无法完全显示。"
@@ -1098,11 +1159,58 @@ class MyMessageHandler:
             logging.error(f"处理自定义表情时出错: {str(e)}")
             return False
 
+    async def handle_media_edit(self, message, channel_id, media_type, forwarded_msg, from_chat=None):
+        """处理媒体消息编辑，将媒体添加到已转发的文本消息中"""
+        try:
+            logging.info(f"开始处理媒体编辑: 类型={media_type}, 消息 ID={forwarded_msg.message_id}")
+
+            # 下载媒体文件
+            media_info = await self.download_media_file(message, media_type)
+            if not media_info:
+                logging.error("媒体文件下载失败")
+                return
+
+            file_path = media_info.get('file_path')
+            media_type = media_info.get('media_type')
+
+            # 获取原消息文本
+            original_text = forwarded_msg.text or forwarded_msg.caption or ""
+
+            # 使用编辑消息方式添加媒体
+            await self.edit_message_with_media(
+                channel_id=channel_id,
+                message_id=forwarded_msg.message_id,
+                text=original_text,
+                media_path=file_path,
+                media_type=media_type,
+                media_info=media_info
+            )
+
+            logging.info(f"成功将媒体添加到消息: {forwarded_msg.message_id}")
+
+        except Exception as e:
+            logging.error(f"处理媒体编辑时出错: {str(e)}")
+            logging.error(traceback.format_exc())
+
+            # 如果编辑失败，尝试作为回复发送媒体
+            try:
+                if 'file_path' in locals() and os.path.exists(file_path):
+                    await self.handle_media_send(
+                        message=message,
+                        channel_id=channel_id,
+                        media_type=media_type,
+                        reply_to_message_id=forwarded_msg.message_id,
+                        from_chat=from_chat
+                    )
+            except Exception as e2:
+                logging.error(f"备用方法发送媒体失败: {str(e2)}")
+
     async def edit_message_with_media(self, channel_id, message_id, text, media_path, media_type, media_info):
         """编辑消息以包含媒体文件"""
         try:
             # 注意：Telegram API 不支持直接编辑消息添加媒体
             # 我们需要删除原消息并发送新消息
+            logging.info(f"开始编辑消息添加媒体: 消息 ID={message_id}, 媒体类型={media_type}")
 
             # 先删除原消息
             await self.bot.delete_message(
