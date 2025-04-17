@@ -491,15 +491,15 @@ class MyMessageHandler:
                 logging.info(f"转发消息信息: 标题={channel_title}, 类型={chat_type}, 用户名={username}")
 
                 # 检查是否有自定义表情
-                await self.handle_custom_emoji(message, channel_id)
+                has_custom_emoji = await self.handle_custom_emoji(message, channel_id)
 
-                # 发送文本消息，支持Markdown格式
+                # 发送文本消息，如果有自定义表情则禁用Markdown格式
                 try:
                     # 如果有原生回复消息的ID，使用原生回复
                     send_kwargs = {
                         'chat_id': channel_id,
                         'text': forwarded_text,
-                        'parse_mode': 'Markdown',
+                        'parse_mode': None if has_custom_emoji else 'Markdown',
                         'disable_web_page_preview': True
                     }
 
@@ -694,7 +694,7 @@ class MyMessageHandler:
             if not deleted_ids and hasattr(event, 'deleted_id'):
                 deleted_ids = [event.deleted_id]
 
-            logging.info(f"检测到消息删除事件: 频道ID={chat_id}, 消息ID={deleted_ids}")
+            # logging.info(f"检测到消息删除事件: 频道ID={chat_id}, 消息ID={deleted_ids}")
 
             if not chat_id:
                 logging.warning("MessageDeleted 事件没有频道ID，无法处理")
@@ -918,12 +918,24 @@ class MyMessageHandler:
             logging.info(f"开始处理媒体组: {group_id}")
 
             # 获取同一组的所有媒体消息
-            media_messages = await self.client.get_messages(
+            # 先获取当前消息之前的消息
+            media_messages_before = await self.client.get_messages(
                 message.chat_id,
-                limit=10,  # 合理的限制
+                limit=20,  # 增加限制以确保获取到全部媒体
                 offset_id=message.id,
                 reverse=True
             )
+
+            # 再获取当前消息及之后的消息
+            media_messages_after = await self.client.get_messages(
+                message.chat_id,
+                limit=20,  # 增加限制以确保获取到全部媒体
+                min_id=message.id - 1  # 从当前消息开始
+            )
+
+            # 合并所有消息
+            media_messages = media_messages_before + media_messages_after
+            logging.info(f"获取到媒体消息总数: {len(media_messages)}个")
 
             # 过滤出同一组的媒体
             group_media = [msg for msg in media_messages if hasattr(msg, 'grouped_id') and msg.grouped_id == group_id]
@@ -1013,8 +1025,39 @@ class MyMessageHandler:
                                 if safe_media_list:
                                     try:
                                         # 尝试作为媒体组发送
-                                        await self.send_media_group(channel_id, safe_media_list, forwarded_msg.message_id)
-                                        logging.info(f"成功发送剩余{len(safe_media_list)}个媒体作为媒体组")
+                                        # 使用编辑模式而不是回复模式
+                                        # 创建一个新的文本消息用于编辑
+                                        try:
+                                            # 发送一个空消息用于编辑
+                                            temp_msg = await self.bot.send_message(
+                                                chat_id=channel_id,
+                                                text="正在加载媒体...",
+                                                disable_web_page_preview=True
+                                            )
+
+                                            # 编辑第一个媒体
+                                            if safe_media_list and len(safe_media_list) > 0:
+                                                first_media = safe_media_list[0]
+                                                await self.edit_message_with_media(
+                                                    channel_id=channel_id,
+                                                    message_id=temp_msg.message_id,
+                                                    text="",  # 空文本
+                                                    media_path=first_media['path'],
+                                                    media_type=first_media['type'],
+                                                    media_info=first_media['media_info']
+                                                )
+
+                                                # 如果有多个媒体，发送剩余的
+                                                if len(safe_media_list) > 1:
+                                                    remaining_media = safe_media_list[1:]
+                                                    await self.send_media_group(channel_id, remaining_media, None)  # 不使用回复
+
+                                            logging.info(f"成功发送剩余{len(safe_media_list)}个媒体作为媒体组")
+                                        except Exception as edit_error:
+                                            logging.error(f"编辑模式发送失败，尝试回复模式: {str(edit_error)}")
+                                            # 如果编辑模式失败，回退到回复模式
+                                            await self.send_media_group(channel_id, safe_media_list, forwarded_msg.message_id)
+                                            logging.info(f"成功发送剩余{len(safe_media_list)}个媒体作为回复")
                                     except Exception as e:
                                         logging.error(f"发送媒体组失败，尝试逐个发送: {str(e)}")
                                         # 如果媒体组发送失败，尝试逐个发送
@@ -1301,7 +1344,7 @@ class MyMessageHandler:
                         break
 
             if has_custom_emoji:
-                logging.info("检测到自定义表情，添加提示消息")
+                logging.info("检测到自定义表情，添加提示消息并禁用Markdown解析")
                 await self.bot.send_message(
                     chat_id=channel_id,
                     text="ℹ️ 原消息包含自定义表情，可能无法完全显示。"
@@ -1368,20 +1411,27 @@ class MyMessageHandler:
                 file_data = media_file.read()
 
                 try:
+                    # 检查消息是否包含自定义表情
+                    has_custom_emoji = False
+                    if text and ('\ud83c' in text or '\ud83d' in text or '\ud83e' in text):
+                        # 简单检测是否可能包含表情
+                        has_custom_emoji = True
+                        logging.info("检测到可能包含表情的消息，禁用Markdown解析")
+
                     # 准备媒体对象
                     if media_type == 'photo':
                         from telegram import InputMediaPhoto
                         media = InputMediaPhoto(
                             media=file_data,
                             caption=text,
-                            parse_mode='Markdown'
+                            parse_mode=None if has_custom_emoji else 'Markdown'
                         )
                     elif media_type == 'video':
                         from telegram import InputMediaVideo
                         media_kwargs = {
                             'media': file_data,
                             'caption': text,
-                            'parse_mode': 'Markdown',
+                            'parse_mode': None if has_custom_emoji else 'Markdown',
                             'supports_streaming': True
                         }
 
@@ -1399,7 +1449,7 @@ class MyMessageHandler:
                         doc_kwargs = {
                             'media': file_data,
                             'caption': text,
-                            'parse_mode': 'Markdown'
+                            'parse_mode': None if has_custom_emoji else 'Markdown'
                         }
 
                         if 'filename' in media_info:
@@ -1412,7 +1462,7 @@ class MyMessageHandler:
                         media = InputMediaDocument(
                             media=file_data,
                             caption=text,
-                            parse_mode='Markdown'
+                            parse_mode=None if has_custom_emoji else 'Markdown'
                         )
 
                     # 编辑消息媒体
@@ -1439,7 +1489,7 @@ class MyMessageHandler:
                     send_kwargs = {
                         'chat_id': channel_id,
                         'caption': text,
-                        'parse_mode': 'Markdown',
+                        'parse_mode': None if has_custom_emoji else 'Markdown',
                         'read_timeout': 1800,
                         'write_timeout': 1800
                     }
@@ -1482,10 +1532,15 @@ class MyMessageHandler:
             logging.error(f"编辑消息添加媒体失败: {str(e)}")
             # 如果失败，尝试恢复原消息
             try:
+                # 检查消息是否包含自定义表情
+                has_emoji = False
+                if text and ('\ud83c' in text or '\ud83d' in text or '\ud83e' in text):
+                    has_emoji = True
+
                 await self.bot.send_message(
                     chat_id=channel_id,
-                    text=text + "\n\n⚠️ *媒体文件加载失败*",
-                    parse_mode='Markdown',
+                    text=text + "\n\n⚠️ " + ("媒体文件加载失败" if has_emoji else "*媒体文件加载失败*"),
+                    parse_mode=None if has_emoji else 'Markdown',
                     disable_web_page_preview=True
                 )
             except Exception as e2:
