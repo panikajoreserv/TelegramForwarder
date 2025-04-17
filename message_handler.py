@@ -418,39 +418,24 @@ class MyMessageHandler:
 
             forwarded_msg = None
 
-            # 尝试直接转发
+            # 不使用直接转发，始终使用处理过的转发
+            logging.info("按要求不使用直接转发，将使用处理过的转发方式")
+
+            # 检查频道是否存在
             try:
-                # 如果有原生回复消息的ID，使用原生回复
-                if reply_to_message_id:
-                    forwarded_msg = await self.bot.copy_message(
-                        chat_id=channel_id,
-                        from_chat_id=from_chat.id,
-                        message_id=message.id,
-                        reply_to_message_id=reply_to_message_id
-                    )
-                    # 保存转发关系
-                    self.db.save_forwarded_message(from_chat.id, message.id, channel_id, forwarded_msg.message_id)
-                    logging.info(f"使用原生回复成功转发消息到 {channel_id}")
-                    return
-                else:
-                    # 尝试直接转发
-                    forwarded_msg = await self.bot.forward_message(
-                        chat_id=channel_id,
-                        from_chat_id=from_chat.id,
-                        message_id=message.id
-                    )
-                    # 保存转发关系
-                    self.db.save_forwarded_message(from_chat.id, message.id, channel_id, forwarded_msg.message_id)
-                    logging.info(get_text('en', 'forward_success', channel_id=channel_id))
+                # 尝试获取频道信息来验证频道是否存在
+                chat = await self.bot.get_chat(channel_id)
+                if not chat:
+                    logging.error(f"频道 {channel_id} 不存在或机器人无法访问，请检查权限或频道ID")
                     return
             except telegram_error.BadRequest as e:
                 if "Chat not found" in str(e):
                     logging.error(f"频道 {channel_id} 不存在或机器人无法访问，请检查权限或频道ID")
                     return
                 else:
-                    logging.warning(get_text('en', 'direct_forward_failed', error=str(e)))
+                    logging.warning(f"验证频道失败: {str(e)}")
             except Exception as e:
-                logging.warning(get_text('en', 'direct_forward_failed', error=str(e)))
+                logging.warning(f"验证频道失败: {str(e)}")
 
             # 如果直接转发失败，处理文本消息
             if getattr(message, 'text', None) or getattr(message, 'caption', None):
@@ -548,12 +533,12 @@ class MyMessageHandler:
 
             # 异步处理媒体消息
             if getattr(message, 'media', None) and forwarded_msg:
-                logging.info(f"检测到媒体消息，开始异步处理")
+                logging.info("检测到媒体消息，开始异步处理")
 
                 # 检查是否是媒体组
                 if hasattr(message, 'grouped_id') and message.grouped_id:
                     # 异步处理媒体组
-                    logging.info(f"检测到媒体组，开始异步处理媒体组")
+                    logging.info("检测到媒体组，开始异步处理媒体组")
                     asyncio.create_task(self.handle_media_group(
                         message=message,
                         channel_id=channel_id,
