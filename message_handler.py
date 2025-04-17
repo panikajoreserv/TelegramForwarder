@@ -718,6 +718,8 @@ class MyMessageHandler:
 
                     # 尝试找到原始消息的转发消息
                     forwarded_msg = None
+                    original_message_content = None
+
                     try:
                         # 在数据库中查找这条消息是否已经转发过
                         if hasattr(event, 'deleted_ids') and event.deleted_ids:
@@ -725,6 +727,10 @@ class MyMessageHandler:
                                 forwarded_msg = self.db.get_forwarded_message(chat_id, msg_id, channel_id)
                                 if forwarded_msg:
                                     logging.info(f"找到原始消息的转发记录: {forwarded_msg['forwarded_message_id']}")
+
+                                    # 尝试获取原始消息内容（如果有缓存）
+                                    # 注意：这里我们无法获取原始内容，因为消息已被删除
+                                    # 如果需要实现这个功能，需要在转发时将消息内容保存到数据库
                                     break
                     except Exception as e:
                         logging.warning(f"获取原始消息的转发记录失败: {e}")
@@ -732,23 +738,39 @@ class MyMessageHandler:
                     # 发送删除通知
                     send_kwargs = {
                         'chat_id': channel_id,
-                        'text': delete_notice,
+                        'text': delete_notice + (f"\n\n原消息内容: {original_message_content}" if original_message_content else ""),
                         'parse_mode': 'Markdown'
                     }
 
                     # 如果找到了原消息的转发记录，使用回复形式
                     if forwarded_msg:
-                        send_kwargs['reply_to_message_id'] = forwarded_msg['forwarded_message_id']
-                        logging.info("使用回复形式发送删除通知")
-
-                    try:
-                        await self.bot.send_message(**send_kwargs)
-                        logging.info(f"成功发送删除通知到频道 {channel_id}")
-                    except Exception as e:
-                        # 如果Markdown解析失败，尝试使用纯文本
-                        logging.warning(f"使用Markdown发送删除通知失败: {e}")
-                        send_kwargs['parse_mode'] = None
-                        await self.bot.send_message(**send_kwargs)
+                        try:
+                            send_kwargs['reply_to_message_id'] = forwarded_msg['forwarded_message_id']
+                            logging.info("使用回复形式发送删除通知")
+                            await self.bot.send_message(**send_kwargs)
+                            logging.info(f"成功发送删除通知到频道 {channel_id}")
+                        except Exception as reply_error:
+                            # 如果回复失败（可能原消息已被删除），发送普通消息
+                            logging.warning(f"回复原消息失败，发送普通消息: {reply_error}")
+                            del send_kwargs['reply_to_message_id']
+                            try:
+                                await self.bot.send_message(**send_kwargs)
+                                logging.info(f"成功发送删除通知到频道 {channel_id} (普通消息)")
+                            except Exception as e:
+                                # 如果Markdown解析失败，尝试使用纯文本
+                                logging.warning(f"使用Markdown发送删除通知失败: {e}")
+                                send_kwargs['parse_mode'] = None
+                                await self.bot.send_message(**send_kwargs)
+                    else:
+                        # 如果没有找到原消息记录，直接发送普通消息
+                        try:
+                            await self.bot.send_message(**send_kwargs)
+                            logging.info(f"成功发送删除通知到频道 {channel_id}")
+                        except Exception as e:
+                            # 如果Markdown解析失败，尝试使用纯文本
+                            logging.warning(f"使用Markdown发送删除通知失败: {e}")
+                            send_kwargs['parse_mode'] = None
+                            await self.bot.send_message(**send_kwargs)
 
                 except Exception as e:
                     logging.error(f"发送删除通知到频道 {channel.get('channel_id')} 失败: {str(e)}")
@@ -910,27 +932,47 @@ class MyMessageHandler:
             # 发送媒体组
             if media_list:
                 if forwarded_msg:
-                    # 如果有转发消息，先删除原消息，然后发送媒体组
+                    # 如果有转发消息，尝试使用第一个媒体编辑原消息，然后发送其余媒体
                     try:
                         # 获取原消息文本
                         original_text = forwarded_msg.text or forwarded_msg.caption or ""
 
-                        # 将原消息文本添加到第一个媒体的标题中
-                        if original_text and media_list and len(media_list) > 0:
-                            media_list[0]['caption'] = original_text
+                        if len(media_list) == 1:
+                            # 如果只有一个媒体，直接编辑原消息
+                            media = media_list[0]
+                            await self.edit_message_with_media(
+                                channel_id=channel_id,
+                                message_id=forwarded_msg.message_id,
+                                text=original_text,
+                                media_path=media['path'],
+                                media_type=media['type'],
+                                media_info=media['media_info']
+                            )
+                            logging.info(f"成功编辑原消息添加媒体: {forwarded_msg.message_id}")
+                        else:
+                            # 如果有多个媒体，编辑第一个，其余作为新消息发送
+                            # 将原消息文本添加到第一个媒体
+                            first_media = media_list[0]
+                            remaining_media = media_list[1:]
 
-                        # 删除原消息
-                        await self.bot.delete_message(
-                            chat_id=channel_id,
-                            message_id=forwarded_msg.message_id
-                        )
-                        logging.info(f"删除原消息以发送媒体组: {forwarded_msg.message_id}")
+                            # 编辑第一个媒体到原消息
+                            await self.edit_message_with_media(
+                                channel_id=channel_id,
+                                message_id=forwarded_msg.message_id,
+                                text=original_text,
+                                media_path=first_media['path'],
+                                media_type=first_media['type'],
+                                media_info=first_media['media_info']
+                            )
+                            logging.info(f"成功编辑原消息添加第一个媒体: {forwarded_msg.message_id}")
 
-                        # 发送媒体组
-                        await self.send_media_group(channel_id, media_list)
+                            # 发送剩余媒体作为回复
+                            if remaining_media:
+                                await self.send_media_group(channel_id, remaining_media, forwarded_msg.message_id)
+                                logging.info(f"成功发送剩余{len(remaining_media)}个媒体作为回复")
                     except Exception as e:
-                        logging.error(f"删除原消息失败，尝试作为回复发送媒体组: {str(e)}")
-                        # 如果删除失败，尝试作为回复发送
+                        logging.error(f"编辑原消息失败，尝试作为回复发送媒体组: {str(e)}")
+                        # 如果编辑失败，尝试作为回复发送整个媒体组
                         await self.send_media_group(channel_id, media_list, forwarded_msg.message_id)
                 else:
                     # 如果没有转发消息，直接发送媒体组
@@ -1193,60 +1235,122 @@ class MyMessageHandler:
     async def edit_message_with_media(self, channel_id, message_id, text, media_path, media_type, media_info):
         """编辑消息以包含媒体文件"""
         try:
-            # 注意：Telegram API 不支持直接编辑消息添加媒体
-            # 我们需要删除原消息并发送新消息
             logging.info(f"开始编辑消息添加媒体: 消息 ID={message_id}, 媒体类型={media_type}")
 
-            # 先删除原消息
-            await self.bot.delete_message(
-                chat_id=channel_id,
-                message_id=message_id
-            )
-
-            # 根据媒体类型发送新消息
+            # 使用编辑消息API而不是删除重发
             with open(media_path, 'rb') as media_file:
                 file_data = media_file.read()
-                send_kwargs = {
-                    'chat_id': channel_id,
-                    'caption': text,
-                    'parse_mode': 'Markdown',
-                    'read_timeout': 1800,
-                    'write_timeout': 1800
-                }
 
-                if media_type == 'photo':
-                    send_kwargs['photo'] = file_data
-                    await self.bot.send_photo(**send_kwargs)
-                elif media_type == 'video':
-                    send_kwargs['video'] = file_data
-                    send_kwargs['supports_streaming'] = True
+                try:
+                    # 准备媒体对象
+                    if media_type == 'photo':
+                        from telegram import InputMediaPhoto
+                        media = InputMediaPhoto(
+                            media=file_data,
+                            caption=text,
+                            parse_mode='Markdown'
+                        )
+                    elif media_type == 'video':
+                        from telegram import InputMediaVideo
+                        media_kwargs = {
+                            'media': file_data,
+                            'caption': text,
+                            'parse_mode': 'Markdown',
+                            'supports_streaming': True
+                        }
 
-                    # 添加视频参数
-                    if 'width' in media_info:
-                        send_kwargs['width'] = media_info['width']
-                    if 'height' in media_info:
-                        send_kwargs['height'] = media_info['height']
-                    if 'duration' in media_info:
-                        send_kwargs['duration'] = media_info['duration']
-                    if 'thumb_path' in media_info and os.path.exists(media_info['thumb_path']):
-                        with open(media_info['thumb_path'], 'rb') as thumb_file:
-                            send_kwargs['thumb'] = thumb_file.read()
+                        # 添加视频参数
+                        if 'width' in media_info:
+                            media_kwargs['width'] = media_info['width']
+                        if 'height' in media_info:
+                            media_kwargs['height'] = media_info['height']
+                        if 'duration' in media_info:
+                            media_kwargs['duration'] = media_info['duration']
 
-                    await self.bot.send_video(**send_kwargs)
+                        media = InputMediaVideo(**media_kwargs)
+                    elif media_type == 'document':
+                        from telegram import InputMediaDocument
+                        doc_kwargs = {
+                            'media': file_data,
+                            'caption': text,
+                            'parse_mode': 'Markdown'
+                        }
 
-                    # 清理缩略图
-                    if 'thumb_path' in media_info and os.path.exists(media_info['thumb_path']):
-                        os.remove(media_info['thumb_path'])
+                        if 'filename' in media_info:
+                            doc_kwargs['filename'] = media_info['filename']
 
-                elif media_type == 'document':
-                    send_kwargs['document'] = file_data
-                    if 'filename' in media_info:
-                        send_kwargs['filename'] = media_info['filename']
-                    await self.bot.send_document(**send_kwargs)
+                        media = InputMediaDocument(**doc_kwargs)
+                    else:
+                        # 如果是未知类型，默认作为文档处理
+                        from telegram import InputMediaDocument
+                        media = InputMediaDocument(
+                            media=file_data,
+                            caption=text,
+                            parse_mode='Markdown'
+                        )
+
+                    # 编辑消息媒体
+                    await self.bot.edit_message_media(
+                        chat_id=channel_id,
+                        message_id=message_id,
+                        media=media,
+                        read_timeout=1800,
+                        write_timeout=1800
+                    )
+
+                    logging.info(f"成功编辑消息并添加{media_type}")
+                except Exception as edit_error:
+                    logging.error(f"编辑消息媒体失败，尝试删除重发: {str(edit_error)}")
+
+                    # 如果编辑失败，回退到删除重发的方式
+                    # 先删除原消息
+                    await self.bot.delete_message(
+                        chat_id=channel_id,
+                        message_id=message_id
+                    )
+
+                    # 根据媒体类型发送新消息
+                    send_kwargs = {
+                        'chat_id': channel_id,
+                        'caption': text,
+                        'parse_mode': 'Markdown',
+                        'read_timeout': 1800,
+                        'write_timeout': 1800
+                    }
+
+                    if media_type == 'photo':
+                        send_kwargs['photo'] = file_data
+                        await self.bot.send_photo(**send_kwargs)
+                    elif media_type == 'video':
+                        send_kwargs['video'] = file_data
+                        send_kwargs['supports_streaming'] = True
+
+                        # 添加视频参数
+                        if 'width' in media_info:
+                            send_kwargs['width'] = media_info['width']
+                        if 'height' in media_info:
+                            send_kwargs['height'] = media_info['height']
+                        if 'duration' in media_info:
+                            send_kwargs['duration'] = media_info['duration']
+                        if 'thumb_path' in media_info and os.path.exists(media_info['thumb_path']):
+                            with open(media_info['thumb_path'], 'rb') as thumb_file:
+                                send_kwargs['thumb'] = thumb_file.read()
+
+                        await self.bot.send_video(**send_kwargs)
+
+                        # 清理缩略图
+                        if 'thumb_path' in media_info and os.path.exists(media_info['thumb_path']):
+                            os.remove(media_info['thumb_path'])
+                    elif media_type == 'document':
+                        send_kwargs['document'] = file_data
+                        if 'filename' in media_info:
+                            send_kwargs['filename'] = media_info['filename']
+                        await self.bot.send_document(**send_kwargs)
+
+                    logging.info(f"使用删除重发方式成功添加{media_type}")
 
             # 清理媒体文件
             await self.cleanup_file(media_path)
-            logging.info(f"成功编辑消息并添加{media_type}")
 
         except Exception as e:
             logging.error(f"编辑消息添加媒体失败: {str(e)}")
@@ -1263,4 +1367,3 @@ class MyMessageHandler:
 
             # 清理媒体文件
             await self.cleanup_file(media_path)
-            raise
