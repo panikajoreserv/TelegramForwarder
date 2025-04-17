@@ -686,9 +686,24 @@ class MyMessageHandler:
             # 注意：删除的消息事件只包含消息ID，不包含内容
             # 我们需要从事件中获取频道ID和消息ID
 
+            # 输出事件信息以便调试
+            logging.info(f"MessageDeleted 事件触发: {event}")
+            logging.info(f"MessageDeleted 事件属性: {dir(event)}")
+
             # 获取频道ID
             chat_id = event.chat_id
+            logging.info(f"MessageDeleted 事件频道ID: {chat_id}")
+
+            # 获取删除的消息ID
+            deleted_ids = getattr(event, 'deleted_ids', [])
+            logging.info(f"MessageDeleted 事件删除的消息ID: {deleted_ids}")
+
             if not chat_id:
+                logging.warning("MessageDeleted 事件没有频道ID，无法处理")
+                return
+
+            if not deleted_ids:
+                logging.warning("MessageDeleted 事件没有删除的消息ID，无法处理")
                 return
 
             # 获取频道信息
@@ -922,10 +937,17 @@ class MyMessageHandler:
                 media_type = self.get_media_type(msg)
                 media_info = await self.download_media_file(msg, media_type)
                 if media_info:
+                    # 安全获取消息标题，确保属性存在
+                    caption = None
+                    if hasattr(msg, 'text') and msg.text:
+                        caption = msg.text
+                    elif hasattr(msg, 'caption') and msg.caption:
+                        caption = msg.caption
+
                     media_list.append({
                         'type': media_type,
                         'path': media_info['file_path'],
-                        'caption': msg.text or msg.caption,
+                        'caption': caption,
                         'media_info': media_info
                     })
 
@@ -1027,16 +1049,56 @@ class MyMessageHandler:
             # 如果有多个媒体文件，使用媒体组发送
             else:
                 # 准备媒体输入列表
+                from telegram import InputMediaPhoto, InputMediaVideo, InputMediaDocument
                 input_media = []
+
                 for i, media in enumerate(media_list):
                     with open(media['path'], 'rb') as media_file:
                         file_data = media_file.read()
-                        media_dict = {
-                            'type': media['type'],
-                            'media': file_data,
-                            'caption': media['caption'] if i == 0 else None  # 只在第一个媒体上显示标题
-                        }
-                        input_media.append(media_dict)
+                        caption = media['caption'] if i == 0 else None  # 只在第一个媒体上显示标题
+
+                        if media['type'] == 'photo':
+                            input_media.append(InputMediaPhoto(
+                                media=file_data,
+                                caption=caption,
+                                parse_mode='Markdown' if caption else None
+                            ))
+                        elif media['type'] == 'video':
+                            media_kwargs = {
+                                'media': file_data,
+                                'caption': caption,
+                                'parse_mode': 'Markdown' if caption else None,
+                                'supports_streaming': True
+                            }
+
+                            # 添加视频参数
+                            media_info = media['media_info']
+                            if 'width' in media_info:
+                                media_kwargs['width'] = media_info['width']
+                            if 'height' in media_info:
+                                media_kwargs['height'] = media_info['height']
+                            if 'duration' in media_info:
+                                media_kwargs['duration'] = media_info['duration']
+
+                            input_media.append(InputMediaVideo(**media_kwargs))
+                        elif media['type'] == 'document':
+                            doc_kwargs = {
+                                'media': file_data,
+                                'caption': caption,
+                                'parse_mode': 'Markdown' if caption else None
+                            }
+
+                            if 'filename' in media['media_info']:
+                                doc_kwargs['filename'] = media['media_info']['filename']
+
+                            input_media.append(InputMediaDocument(**doc_kwargs))
+                        else:
+                            # 如果是未知类型，默认作为文档处理
+                            input_media.append(InputMediaDocument(
+                                media=file_data,
+                                caption=caption,
+                                parse_mode='Markdown' if caption else None
+                            ))
 
                 # 发送媒体组
                 await self.bot.send_media_group(
