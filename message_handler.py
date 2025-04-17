@@ -686,17 +686,15 @@ class MyMessageHandler:
             # 注意：删除的消息事件只包含消息ID，不包含内容
             # 我们需要从事件中获取频道ID和消息ID
 
-            # 输出事件信息以便调试
-            logging.info(f"MessageDeleted 事件触发: {event}")
-            logging.info(f"MessageDeleted 事件属性: {dir(event)}")
-
             # 获取频道ID
             chat_id = event.chat_id
-            logging.info(f"MessageDeleted 事件频道ID: {chat_id}")
 
             # 获取删除的消息ID
             deleted_ids = getattr(event, 'deleted_ids', [])
-            logging.info(f"MessageDeleted 事件删除的消息ID: {deleted_ids}")
+            if not deleted_ids and hasattr(event, 'deleted_id'):
+                deleted_ids = [event.deleted_id]
+
+            logging.info(f"检测到消息删除事件: 频道ID={chat_id}, 消息ID={deleted_ids}")
 
             if not chat_id:
                 logging.warning("MessageDeleted 事件没有频道ID，无法处理")
@@ -988,10 +986,76 @@ class MyMessageHandler:
                             )
                             logging.info(f"成功编辑原消息添加第一个媒体: {forwarded_msg.message_id}")
 
-                            # 发送剩余媒体作为回复
+                            # 发送剩余媒体作为媒体组
                             if remaining_media:
-                                await self.send_media_group(channel_id, remaining_media, forwarded_msg.message_id)
-                                logging.info(f"成功发送剩余{len(remaining_media)}个媒体作为回复")
+                                # 创建媒体文件的副本，防止并发删除
+                                safe_media_list = []
+                                for media in remaining_media:
+                                    try:
+                                        # 创建新的临时文件
+                                        with open(media['path'], 'rb') as src_file:
+                                            content = src_file.read()
+                                            tmp = NamedTemporaryFile(delete=False, prefix='tg_copy_', suffix=f'.{media["type"]}')
+                                            tmp.write(content)
+                                            tmp.close()
+
+                                            # 更新媒体路径
+                                            new_media = media.copy()
+                                            new_media['path'] = tmp.name
+                                            # 记录临时文件
+                                            self.temp_files[tmp.name] = datetime.now()
+                                            safe_media_list.append(new_media)
+                                            logging.info(f"创建媒体文件副本: {tmp.name}")
+                                    except Exception as e:
+                                        logging.error(f"创建媒体文件副本失败: {str(e)}")
+
+                                # 使用安全的媒体列表发送
+                                if safe_media_list:
+                                    try:
+                                        # 尝试作为媒体组发送
+                                        await self.send_media_group(channel_id, safe_media_list, forwarded_msg.message_id)
+                                        logging.info(f"成功发送剩余{len(safe_media_list)}个媒体作为媒体组")
+                                    except Exception as e:
+                                        logging.error(f"发送媒体组失败，尝试逐个发送: {str(e)}")
+                                        # 如果媒体组发送失败，尝试逐个发送
+                                        for media in safe_media_list:
+                                            try:
+                                                # 发送单个媒体
+                                                with open(media['path'], 'rb') as media_file:
+                                                    file_data = media_file.read()
+                                                    send_kwargs = {
+                                                        'chat_id': channel_id,
+                                                        'caption': media['caption'],
+                                                        'reply_to_message_id': forwarded_msg.message_id,
+                                                        'read_timeout': 1800,
+                                                        'write_timeout': 1800
+                                                    }
+
+                                                    if media['type'] == 'photo':
+                                                        send_kwargs['photo'] = file_data
+                                                        await self.bot.send_photo(**send_kwargs)
+                                                    elif media['type'] == 'video':
+                                                        send_kwargs['video'] = file_data
+                                                        send_kwargs['supports_streaming'] = True
+
+                                                        # 添加视频参数
+                                                        media_info = media['media_info']
+                                                        if 'width' in media_info:
+                                                            send_kwargs['width'] = media_info['width']
+                                                        if 'height' in media_info:
+                                                            send_kwargs['height'] = media_info['height']
+                                                        if 'duration' in media_info:
+                                                            send_kwargs['duration'] = media_info['duration']
+
+                                                        await self.bot.send_video(**send_kwargs)
+                                                    elif media['type'] == 'document':
+                                                        send_kwargs['document'] = file_data
+                                                        if 'filename' in media['media_info']:
+                                                            send_kwargs['filename'] = media['media_info']['filename']
+                                                        await self.bot.send_document(**send_kwargs)
+                                                logging.info(f"成功发送单个媒体作为回复")
+                                            except Exception as e2:
+                                                logging.error(f"发送单个媒体失败: {str(e2)}")
                     except Exception as e:
                         logging.error(f"编辑原消息失败，尝试作为回复发送媒体组: {str(e)}")
                         # 如果编辑失败，尝试作为回复发送整个媒体组

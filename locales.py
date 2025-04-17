@@ -172,7 +172,7 @@ TRANSLATIONS = {
         'chat_type_channel': "📢 Channel",
         'reply_to_message': "↩️ *Reply to:* {text}",
         'edited_message': "✏️ *Edited message*",
-        'deleted_message': "🗑️ *Message was deleted*",
+        'deleted_message': "🗑️ *Original message has been deleted*",
     },
     'zh': {
         'file_cleanup_success': "已清理文件：{file_path}",
@@ -204,7 +204,7 @@ TRANSLATIONS = {
         'chat_type_channel': "📢 频道",
         'reply_to_message': "↩️ *回复:* {text}",
         'edited_message': "✏️ *消息已编辑*",
-        'deleted_message': "🗑️ *消息已删除*",
+        'deleted_message': "🗑️ *原消息已被删除*",
         'download_progress': "下载进度：{percentage:.1f}%",
         'forward_message_error': "处理消息转发时出错：{error}",
         'welcome': "👋 欢迎使用频道转发机器人!\n\n使用 /channels 管理频道和转发配对",
