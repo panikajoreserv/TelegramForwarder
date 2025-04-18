@@ -326,7 +326,7 @@ TRANSLATIONS = {
         'page_info': "Page {current}/{total}",
         'language_changed': "✅ Language changed to English",
         'select_language': "Please select your language:",
-        'current_language': "Current language: {lang}",
+        'current_language': "Current language: {language_name}",
         'help_message': """
 📚 *Channel Forward Bot Help*
 
@@ -508,7 +508,7 @@ TRANSLATIONS = {
         'page_info': "第 {current}/{total} 页",
         'language_changed': "✅ 语言已更改为中文",
         'select_language': "请选择语言:",
-        'current_language': "当前语言: {lang}",
+        'current_language': "当前语言: {language_name}",
         'pair_added_success': "✅ 成功添加转发配对！\n\n监控频道: {monitor}\n转发频道: {forward}",
         'pair_add_failed': "❌ 添加转发配对失败",
         'error_adding_pair': "❌ 添加配对时发生错误",
