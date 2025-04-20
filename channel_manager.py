@@ -373,11 +373,11 @@ self.handle_confirm_remove_pair,
                     raise
 
             # 处理转发的频道/群组消息
-            elif message.forward_from_chat:
-                chat = message.forward_from_chat
-                chat_id = self.normalize_channel_id(chat.id)
-                chat_title = chat.title
-                chat_username = chat.username
+            #elif message.forward__chat:
+                #chat = message.forward__chat
+                #chat_id = self.normalize_channel_id(chat.id)
+                #chat_title = chat.title
+                #chat_username = chat.username
 
             # 处理转发的用户消息
             elif message.forward_from:
